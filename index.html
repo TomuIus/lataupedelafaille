@@ -120,12 +120,25 @@
     }
     #count { margin: 0 0 16px; font-weight: 700; opacity: .7; }
 
+    /* Catalogue des rôles */
+    #roleList { list-style: none; margin: 0 0 16px; padding: 0; }
+    #roleList li {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 10px 14px;
+      background: var(--paper); border: 3px solid var(--line); border-radius: 14px;
+    }
+    #roleList li > div { flex: 1; }
+    .role-name { font-weight: 700; font-size: 1.05rem; }
+    .role-desc { font-size: .9rem; opacity: .85; margin-top: 2px; }
+    .role-tag { flex: none; font-size: .8rem; font-weight: 700; opacity: .7; }
+    #roleList input[type="checkbox"] { width: 26px; height: 26px; flex: none; accent-color: #ff5d9e; }
+
     /* Écran de jeu */
     #role {
       margin: 16px 0; padding: 20px; text-align: center; font-size: 1.3rem; font-weight: 700;
       border: 3px solid var(--line); border-radius: 16px;
     }
-    #role.impostor { background: #ff5d73; color: #fff; }
+    #role.mole { background: #ff5d73; color: #fff; }
+    #role.badger { background: #ffd166; color: #2b2d42; }
     #role.crew { background: #4cc9f0; color: #2b2d42; }
     #hostButtons {
       display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; padding-top: 18px;
@@ -218,6 +231,8 @@
     <h2>Salon <span id="roomCode"></span></h2>
     <ul id="players"></ul>
     <p id="count"></p>
+    <h3>Rôles de la partie</h3>
+    <ul id="roleList"></ul>
     <button id="start" hidden>Lancer la partie</button>
     <br><br>
     <button id="leave">Quitter le salon</button>
@@ -263,7 +278,7 @@
 
     let roomCode = null;
     let myId = null;
-    let myRole = null; // true = imposteur, false = équipier
+    let myRole = null; // crew, mole ou badger
     let channel = null; // le canal temps réel du salon courant
 
     const $ = (id) => document.getElementById(id);
@@ -393,7 +408,7 @@
       if (!room) return leaveLocally("Le salon a été fermé.");
       const { data: players } = await db
         .from("players")
-        .select("id, pseudo, is_impostor, score")
+        .select("id, pseudo, role, score")
         .eq("room_code", roomCode);
       const { data: votes } = await db
         .from("votes")
@@ -435,6 +450,32 @@
           $("players").appendChild(li);
         }
         $("count").textContent = `${players.length} / ${room.max_players} joueurs`;
+
+        // Catalogue : tout le monde le voit, seul l'hôte peut cocher les rôles optionnels
+        $("roleList").innerHTML = "";
+        for (const [id, r] of Object.entries(ROLES)) {
+          const li = document.createElement("li");
+          const box = document.createElement("div");
+          const name = document.createElement("div");
+          name.className = "role-name"; name.textContent = r.name;
+          const desc = document.createElement("div");
+          desc.className = "role-desc"; desc.textContent = r.desc;
+          box.append(name, desc);
+          li.append(box);
+          if (r.optional) {
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.checked = (room.roles || []).includes(id);
+            cb.disabled = !isHost;
+            cb.addEventListener("change", () => setRoleEnabled(id, cb.checked));
+            li.append(cb);
+          } else {
+            const tag = document.createElement("span");
+            tag.className = "role-tag"; tag.textContent = "toujours en jeu";
+            li.append(tag);
+          }
+          $("roleList").appendChild(li);
+        }
         $("start").hidden = !isHost;
         $("leave").hidden = isHost;
         $("closeRoom").hidden = !isHost;
@@ -444,7 +485,7 @@
 
       if (room.status === "playing") {
         const me = players.find((p) => p.id === myId);
-        myRole = me ? me.is_impostor : null;
+        myRole = me ? me.role : null;
         $("hostButtons").hidden = !isHost;
         show("game");
         return;
@@ -459,7 +500,7 @@
             .eq("code", roomCode)
             .eq("status", "voting")
             .select();
-          if (done && done.length) await awardPoints("loss");
+          if (done && done.length) await awardPoints(room.result);
         }
 
         const hasVoted = votes.some((v) => v.voter_id === myId);
@@ -468,7 +509,7 @@
           $("voteStatus").textContent =
             `Vote enregistré. En attente des autres (${votes.length} / ${players.length}).`;
         } else {
-          $("voteStatus").textContent = "Qui est l'imposteur ?";
+          $("voteStatus").textContent = "Qui est la Taupe ?";
           for (const p of players) {
             if (p.id === myId) continue; // on ne vote pas pour soi
             const b = document.createElement("button");
@@ -482,28 +523,33 @@
       }
 
       if (room.status === "finished") {
-        const impostor = players.find((p) => p.is_impostor);
-        const name = impostor ? impostor.pseudo : "?";
+        const { mole, badger, counts, caught, badgerWon, gains } =
+          computePoints(room.result, players, votes);
+        const moleName = mole ? mole.pseudo : "?";
 
-        const { counts, caught, gains } = computePoints(room.result, players, votes);
-
-        if (room.result === "win") {
-          $("resultText").textContent =
-            `Victoire de l'équipe ! L'imposteur était ${name} : il perd.`;
-          $("voteResult").innerHTML = "";
-        } else {
-          // (la règle « strictement plus de voix » est dans computePoints)
-          $("resultText").textContent = caught
-            ? `Défaite, mais ${name} était l'imposteur et il a été démasqué : il perd aussi !`
-            : `Défaite. ${name} était l'imposteur et il n'a pas été démasqué : l'imposteur gagne.`;
-
-          $("voteResult").innerHTML = "";
-          for (const p of players) {
-            const li = document.createElement("li");
-            li.textContent = `${p.pseudo} : ${counts[p.id] || 0} vote(s)`;
-            $("voteResult").appendChild(li);
+        let text = room.result === "win"
+          ? `Victoire de l'équipe ! ${moleName} était la Taupe : elle perd.`
+          : caught
+            ? `Défaite, mais ${moleName} était la Taupe et elle a été démasquée : elle perd aussi !`
+            : `Défaite. ${moleName} était la Taupe et elle n'a pas été démasquée : la Taupe gagne.`;
+        if (badger) {
+          if (room.result !== "win") {
+            text += ` ${badger.pseudo} était le Blaireau : l'équipe a perdu, il ne gagne pas.`;
+          } else if (badgerWon) {
+            text += ` ${badger.pseudo} était le Blaireau et a réussi à passer pour la Taupe !`;
+          } else {
+            text += ` ${badger.pseudo} était le Blaireau, mais il n'a pas assez trompé l'équipe.`;
           }
         }
+        $("resultText").textContent = text;
+
+        $("voteResult").innerHTML = "";
+        for (const p of players) {
+          const li = document.createElement("li");
+          li.textContent = `${p.pseudo} : ${counts[p.id] || 0} vote(s)`;
+          $("voteResult").appendChild(li);
+        }
+
         // Classement cumulé du salon, avec les points gagnés pendant cette partie
         const ranking = [...players].sort(
           (a, b) => b.score - a.score || a.pseudo.localeCompare(b.pseudo)
@@ -523,11 +569,17 @@
 
     // ---------- Actions ----------
 
-    // Lancer la partie : tirage de l'imposteur, puis changement de statut
+    // Lancer la partie : tirage des rôles, puis changement de statut
     $("start").addEventListener("click", async () => {
       const { data: players } = await db.from("players").select("id").eq("room_code", roomCode);
-      const impostor = players[Math.floor(Math.random() * players.length)];
-      await db.from("players").update({ is_impostor: true }).eq("id", impostor.id);
+      const { data: room } = await db.from("rooms").select("roles").eq("code", roomCode).single();
+
+      // On mélange les joueurs : le 1er est la Taupe, le 2e le Blaireau si l'hôte l'a activé
+      const shuffled = [...players].sort(() => Math.random() - 0.5);
+      await db.from("players").update({ role: "mole" }).eq("id", shuffled[0].id);
+      if ((room.roles || []).includes("badger") && shuffled.length > 1) {
+        await db.from("players").update({ role: "badger" }).eq("id", shuffled[1].id);
+      }
       await db.from("rooms").update({ status: "playing" }).eq("code", roomCode);
     });
 
@@ -538,10 +590,9 @@
         roleEl.hidden = true;
         $("toggleRole").textContent = "Voir mon rôle";
       } else {
-        roleEl.textContent = myRole
-          ? "Vous êtes l'IMPOSTEUR : faites perdre l'équipe sans vous faire repérer."
-          : "Vous êtes un ÉQUIPIER : gagnez la partie et démasquez l'imposteur.";
-        roleEl.className = myRole ? "impostor" : "crew";
+        const r = ROLES[myRole] || ROLES.crew;
+        roleEl.textContent = `Vous êtes ${r.name.toUpperCase()} : ${r.desc}`;
+        roleEl.className = ROLES[myRole] ? myRole : "crew";
         roleEl.hidden = false;
         $("toggleRole").textContent = "Cacher mon rôle";
       }
@@ -549,13 +600,12 @@
 
     // L'hôte indique le résultat de la partie
     $("win").addEventListener("click", async () => {
-      const { data: done } = await db
+      // Victoire ou défaite : le vote a lieu dans les deux cas
+      await db
         .from("rooms")
-        .update({ status: "finished", result: "win" })
+        .update({ status: "voting", result: "win" })
         .eq("code", roomCode)
-        .eq("status", "playing")
-        .select();
-      if (done && done.length) await awardPoints("win");
+        .eq("status", "playing");
     });
     $("loss").addEventListener("click", async () => {
       await db.from("rooms").update({ status: "voting", result: "loss" }).eq("code", roomCode);
@@ -572,56 +622,88 @@
     // Nouvelle partie : on efface votes, rôles et résultat, et on revient au salon
     $("again").addEventListener("click", async () => {
       await db.from("votes").delete().eq("room_code", roomCode);
-      await db.from("players").update({ is_impostor: false }).eq("room_code", roomCode);
+      await db.from("players").update({ role: "crew" }).eq("room_code", roomCode);
       await db.from("rooms").update({ status: "lobby", result: null }).eq("code", roomCode);
     });
 
     // ---------- Points ----------
 
+    // Catalogue des rôles. Les identifiants (crew, mole, badger) sont ceux stockés en base.
+    const ROLES = {
+      crew: {
+        name: "Équipier", optional: false,
+        desc: "Gagnez la partie et démasquez la Taupe."
+      },
+      mole: {
+        name: "La Taupe", optional: false,
+        desc: "Faites perdre l'équipe sans vous faire repérer. Il y en a toujours une seule."
+      },
+      badger: {
+        name: "Le Blaireau", optional: true,
+        desc: "Faites gagner l'équipe, mais faites-vous passer pour la Taupe : vous gagnez si l'équipe gagne et que vous recevez plus de voix qu'elle."
+      }
+    };
+
     // Barème : à ajuster ici après les tests si le jeu paraît déséquilibré
     const POINTS = {
-      teamWin: 1,      // partie gagnée : chaque équipier
-      voteHit: 1,      // partie perdue, imposteur démasqué : chaque joueur qui a voté pour lui
-      impostorWin: 2   // partie perdue, imposteur non démasqué (égalité comprise)
+      teamWin: 1,    // partie gagnée : chaque joueur sauf la Taupe
+      voteHit: 1,    // chaque joueur qui a voté pour la Taupe, victoire ou défaite (si démasquée)
+      moleWin: 2,    // partie perdue, Taupe non démasquée (égalité comprise)
+      badgerWin: 2   // bonus du Blaireau : partie gagnée et plus de voix que la Taupe
     };
+
+    // L'hôte active ou désactive un rôle optionnel
+    async function setRoleEnabled(id, enabled) {
+      const { data: room } = await db.from("rooms").select("roles").eq("code", roomCode).single();
+      const set = new Set(room.roles || []);
+      if (enabled) set.add(id); else set.delete(id);
+      await db.from("rooms").update({ roles: [...set] }).eq("code", roomCode);
+    }
 
     // Calcule qui gagne combien de points, sans rien écrire dans la base
     function computePoints(result, players, votes) {
-      const impostor = players.find((p) => p.is_impostor);
+      const mole = players.find((p) => p.role === "mole");
+      const badger = players.find((p) => p.role === "badger");
 
       // Nombre de voix reçues par chaque joueur
       const counts = {};
       for (const v of votes) counts[v.target_id] = (counts[v.target_id] || 0) + 1;
 
+      // Règle : la Taupe est démasquée seulement si elle a STRICTEMENT plus de voix que chaque autre
+      const moleVotes = mole ? (counts[mole.id] || 0) : 0;
+      const othersMax = Math.max(
+        0, ...players.filter((p) => p.role !== "mole").map((p) => counts[p.id] || 0)
+      );
+      const caught = moleVotes > othersMax;
+
       const gains = {};
-      let caught = false;
+      const add = (id, n) => { gains[id] = (gains[id] || 0) + n; };
+      let badgerWon = false;
+
+      const rewardVoters = () => {
+        for (const v of votes) if (mole && v.target_id === mole.id) add(v.voter_id, POINTS.voteHit);
+      };
 
       if (result === "win") {
-        for (const p of players) if (!p.is_impostor) gains[p.id] = POINTS.teamWin;
-      } else if (impostor) {
-        // Règle : l'imposteur est démasqué seulement s'il a STRICTEMENT plus de voix que chaque autre
-        const impostorVotes = counts[impostor.id] || 0;
-        const othersMax = Math.max(
-          0, ...players.filter((p) => !p.is_impostor).map((p) => counts[p.id] || 0)
-        );
-        caught = impostorVotes > othersMax;
-
-        if (caught) {
-          for (const v of votes) {
-            if (v.target_id === impostor.id) gains[v.voter_id] = (gains[v.voter_id] || 0) + POINTS.voteHit;
-          }
-        } else {
-          gains[impostor.id] = POINTS.impostorWin;
+        for (const p of players) if (p.role !== "mole") add(p.id, POINTS.teamWin);
+        rewardVoters();
+        // Le Blaireau réussit s'il reçoit STRICTEMENT plus de voix que la Taupe
+        if (badger && (counts[badger.id] || 0) > moleVotes) {
+          badgerWon = true;
+          add(badger.id, POINTS.badgerWin);
         }
+      } else if (mole) {
+        if (caught) rewardVoters();
+        else add(mole.id, POINTS.moleWin);
       }
-      return { impostor, counts, caught, gains };
+      return { mole, badger, counts, caught, badgerWon, gains };
     }
 
     // Ajoute les points au score de chaque joueur (appelé une seule fois, par l'hôte)
     async function awardPoints(result) {
       const { data: players } = await db
         .from("players")
-        .select("id, score, is_impostor")
+        .select("id, score, role")
         .eq("room_code", roomCode);
       const { data: votes } = await db
         .from("votes")
