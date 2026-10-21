@@ -132,6 +132,11 @@
     .role-tag { flex: none; font-size: .8rem; font-weight: 700; opacity: .7; }
     #roleList input[type="checkbox"] { width: 26px; height: 26px; flex: none; accent-color: #ff5d9e; }
 
+    /* Test des alertes */
+    .opt { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-weight: 700; }
+    .opt input { width: 24px; height: 24px; flex: none; accent-color: #ff5d9e; }
+    #alertStatus { min-height: 1.2em; margin: 6px 0 18px; font-weight: 700; }
+
     /* Écran de jeu */
     #role {
       margin: 16px 0; padding: 20px; text-align: center; font-size: 1.3rem; font-weight: 700;
@@ -248,6 +253,11 @@
     <p id="count"></p>
     <h3>Rôles de la partie</h3>
     <ul id="roleList"></ul>
+    <h3>Tester les alertes</h3>
+    <p class="res-legend">Cliquez sur le bouton, puis retournez sur LoL : l'alerte arrive après quelques secondes.</p>
+    <label class="opt"><input type="checkbox" id="soundOn" checked> Son activé</label>
+    <button id="testAlert">Tester l'alerte</button>
+    <p id="alertStatus"></p>
     <button id="start" hidden>Lancer la partie</button>
     <br><br>
     <button id="leave">Quitter le salon</button>
@@ -816,6 +826,73 @@
       }
       enterRoom(saved.roomCode, saved.playerId);
     }
+
+    // ---------- Alertes : test du son et de la notification ----------
+
+    const ALERT_DELAY_SECONDS = 10; // temps pour revenir sur LoL après le clic
+    const SOUND_KEY = "imposteur-lol-sound";
+
+    // Le choix du son est mémorisé dans le navigateur (utile si on joue à plusieurs dans la même pièce)
+    try { $("soundOn").checked = (localStorage.getItem(SOUND_KEY) !== "off"); } catch (e) {}
+    $("soundOn").addEventListener("change", () => {
+      try { localStorage.setItem(SOUND_KEY, $("soundOn").checked ? "on" : "off"); } catch (e) {}
+    });
+
+    // Un bip généré par le navigateur : aucun fichier audio à héberger
+    function playBeep(ctx, frequency) {
+      try {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = frequency;
+        gain.gain.value = 0.25;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.5);
+      } catch (e) { console.error(e); }
+    }
+
+    async function askNotificationPermission() {
+      if (!("Notification" in window)) return "unsupported";
+      if (Notification.permission === "default") return await Notification.requestPermission();
+      return Notification.permission;
+    }
+
+    $("testAlert").addEventListener("click", async () => {
+      // Tout ce qui demande un clic de l'utilisateur (permission, audio) se fait maintenant
+      const permission = await askNotificationPermission();
+      let ctx = null;
+      try {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        await ctx.resume();
+      } catch (e) { console.error(e); }
+
+      $("testAlert").disabled = true;
+      const end = Date.now() + ALERT_DELAY_SECONDS * 1000;
+
+      const timer = setInterval(() => {
+        const left = Math.ceil((end - Date.now()) / 1000);
+        if (left > 0) {
+          $("alertStatus").textContent = `Alerte dans ${left} s : retournez sur LoL.`;
+          return;
+        }
+        clearInterval(timer);
+
+        const sound = $("soundOn").checked;
+        if (sound && ctx) playBeep(ctx, 660);
+        if (permission === "granted") {
+          try {
+            new Notification("La Taupe de la Faille", { body: "Test : l'alerte fonctionne ici !" });
+          } catch (e) { console.error(e); }
+        }
+
+        $("alertStatus").textContent =
+          `Alerte envoyée (notification : ${permission === "granted" ? "oui" : "non autorisée"}, ` +
+          `son : ${sound ? "oui" : "désactivé"}). L'avez-vous vue ou entendue ?`;
+        $("testAlert").disabled = false;
+      }, 500);
+    });
 
     // ---------- Thème clair / sombre ----------
 
