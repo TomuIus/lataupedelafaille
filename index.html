@@ -152,6 +152,17 @@
     #voteList button { background: #b185db; color: #fff; min-height: 60px; font-size: 1.15rem; }
 
     /* Résultat */
+    .res-legend { margin: 0 0 10px; font-size: .9rem; opacity: .8; }
+    .res-head { display: flex; align-items: center; gap: 10px; font-size: 1.05rem; }
+    .res-detail { margin-top: 3px; font-size: .9rem; font-weight: 400; }
+    .badge {
+      font-size: .8rem; padding: 2px 10px; color: #2b2d42;
+      border: 2px solid var(--line); border-radius: 999px;
+    }
+    .badge.mole { background: #ff5d73; color: #fff; }
+    .badge.badger { background: #ffd166; }
+    .badge.crew { background: #4cc9f0; }
+
     #resultText { font-size: 1.3rem; font-weight: 700; line-height: 1.4; }
     #voteResult li, #ranking li {
       margin-bottom: 8px; padding: 8px 14px; font-weight: 700;
@@ -198,8 +209,6 @@
       <!-- Museau rose -->
       <ellipse cx="75" cy="90" rx="13" ry="9" fill="#ff8fc7" stroke="#2b2d42" stroke-width="3.5"/>
       <ellipse cx="75" cy="87" rx="6" ry="3.5" fill="#ff5d9e"/>
-      <!-- Le doigt devant la bouche : chut ! -->
-      <rect x="69" y="98" width="12" height="28" rx="6" fill="#c9a27e" stroke="#2b2d42" stroke-width="3.5"/>
       <!-- Le bord de terre, devant -->
       <path d="M8 126 Q8 150 75 153 Q142 150 142 126 Q142 116 126 114 L24 114 Q8 116 8 126 Z"
             fill="#a1745a" stroke="#2b2d42" stroke-width="4" stroke-linejoin="round"/>
@@ -262,6 +271,8 @@
   <div id="finished" hidden>
     <h2>Fin de partie</h2>
     <p id="resultText"></p>
+    <h3>Les rôles et les votes</h3>
+    <p class="res-legend">✅ a désigné la Taupe · ❌ s'est trompé</p>
     <ul id="voteResult"></ul>
     <h3>Classement du salon</h3>
     <ul id="ranking"></ul>
@@ -544,9 +555,32 @@
         $("resultText").textContent = text;
 
         $("voteResult").innerHTML = "";
+        const byId = Object.fromEntries(players.map((p) => [p.id, p]));
         for (const p of players) {
           const li = document.createElement("li");
-          li.textContent = `${p.pseudo} : ${counts[p.id] || 0} vote(s)`;
+
+          const head = document.createElement("div");
+          head.className = "res-head";
+          const name = document.createElement("span");
+          name.textContent = p.pseudo;
+          const badge = document.createElement("span");
+          badge.className = "badge " + (ROLES[p.role] ? p.role : "crew");
+          badge.textContent = (ROLES[p.role] || ROLES.crew).name;
+          head.append(name, badge);
+
+          // Pour qui a-t-il voté ? Et a-t-il vu juste ? (la Taupe ne peut pas se désigner : pas de verdict)
+          const myVote = votes.find((v) => v.voter_id === p.id);
+          let voteText = "n'a pas voté";
+          if (myVote) {
+            const target = byId[myVote.target_id];
+            voteText = `a voté pour ${target ? target.pseudo : "?"}`;
+            if (p.role !== "mole" && target) voteText += target.role === "mole" ? " ✅" : " ❌";
+          }
+          const detail = document.createElement("div");
+          detail.className = "res-detail";
+          detail.textContent = `${voteText} · reçoit ${counts[p.id] || 0} vote(s)`;
+
+          li.append(head, detail);
           $("voteResult").appendChild(li);
         }
 
