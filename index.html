@@ -132,6 +132,18 @@
     .role-tag { flex: none; font-size: .8rem; font-weight: 700; opacity: .7; }
     #roleList input[type="checkbox"] { width: 26px; height: 26px; flex: none; accent-color: #ff5d9e; }
 
+    #roleList select {
+      font: inherit; font-weight: 700; padding: 2px 8px; margin: 0 4px; cursor: pointer;
+      color: var(--text); background: var(--card);
+      border: 2px solid var(--line); border-radius: 8px;
+    }
+    #vaneSide {
+      margin: 0 0 16px; padding: 14px; text-align: center; font-weight: 700;
+      border: 3px solid var(--line); border-radius: 14px;
+    }
+    #vaneSide.team { background: #4cc9f0; color: #2b2d42; }
+    #vaneSide.mole { background: #ff5d73; color: #fff; }
+
     /* Test des alertes */
     .opt { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-weight: 700; }
     .opt input { width: 24px; height: 24px; flex: none; accent-color: #ff5d9e; }
@@ -149,6 +161,7 @@
     }
     #role.mole { background: #ff5d73; color: #fff; }
     #role.badger { background: #ffd166; color: #2b2d42; }
+    #role.vane { background: #b185db; color: #fff; }
     #role.crew { background: #4cc9f0; color: #2b2d42; }
     #hostButtons {
       display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; padding-top: 18px;
@@ -172,6 +185,7 @@
     .badge.mole { background: #ff5d73; color: #fff; }
     .badge.badger { background: #ffd166; }
     .badge.crew { background: #4cc9f0; }
+    .badge.vane { background: #b185db; color: #fff; }
 
     #resultText { font-size: 1.3rem; font-weight: 700; line-height: 1.4; }
     #voteResult li, #ranking li {
@@ -280,7 +294,10 @@
     <h2>Partie en cours</h2>
     <button id="toggleRole">Voir mon rôle</button>
     <p id="role" hidden></p>
+    <div id="vaneSide" hidden></div>
     <div id="hostButtons" hidden>
+      <button id="startGame" hidden>La partie de LoL a commencé</button>
+      <p id="vaneStarted" hidden>⏱️ Compte à rebours de la Girouette lancé.</p>
       <p>Résultat de la partie de League of Legends :</p>
       <button id="win">Victoire</button>
       <button id="loss">Défaite</button>
@@ -461,11 +478,13 @@
 
       players.sort((a, b) => a.pseudo.localeCompare(b.pseudo));
       const isHost = (myId === room.host_id);
+      if (room.status !== "playing") stopVane();
 
       if (room.status === "lobby") {
         // Nouvelle partie : on oublie le rôle précédent et on le recache
         myRole = null;
         $("role").hidden = true;
+        $("vaneSide").hidden = true;
         $("toggleRole").textContent = "Voir mon rôle";
 
         show("lobby");
@@ -499,6 +518,22 @@
           const desc = document.createElement("div");
           desc.className = "role-desc"; desc.textContent = r.desc;
           box.append(name, desc);
+          if (id === "vane" && (room.roles || []).includes("vane")) {
+            const opt = document.createElement("div");
+            opt.className = "role-desc";
+            opt.append("Tirage toutes les ");
+            const sel = document.createElement("select");
+            for (const m of [3, 5, 8, 10]) {
+              const o = document.createElement("option");
+              o.value = m; o.textContent = m;
+              sel.appendChild(o);
+            }
+            sel.value = room.vane_interval;
+            sel.disabled = !isHost;
+            sel.addEventListener("change", () => setVaneInterval(Number(sel.value)));
+            opt.append(sel, " minutes");
+            box.append(opt);
+          }
           li.append(box);
           if (r.optional) {
             const cb = document.createElement("input");
@@ -525,6 +560,10 @@
         const me = players.find((p) => p.id === myId);
         myRole = me ? me.role : null;
         $("hostButtons").hidden = !isHost;
+        const vaneOn = (room.roles || []).includes("vane");
+        $("startGame").hidden = !(isHost && vaneOn && !room.game_started_at);
+        $("vaneStarted").hidden = !(isHost && vaneOn && room.game_started_at);
+        updateVane(room);
         show("game");
         return;
       }
@@ -561,8 +600,8 @@
       }
 
       if (room.status === "finished") {
-        const { mole, badger, counts, caught, badgerWon, gains } =
-          computePoints(room.result, players, votes);
+        const { mole, badger, vane, counts, caught, badgerWon, vaneWon, vaneSide, gains } =
+          computePoints(room.result, players, votes, vaneFinalSide(room));
         const moleName = mole ? mole.pseudo : "?";
 
         let text = room.result === "win"
@@ -578,6 +617,10 @@
           } else {
             text += ` ${badger.pseudo} était le Blaireau, mais il n'a pas assez trompé l'équipe.`;
           }
+        }
+        if (vane) {
+          text += ` ${vane.pseudo} était la Girouette, finie du côté de ${sideLabel(vaneSide)} : ` +
+                  (vaneWon ? "elle gagne !" : "elle perd.");
         }
         $("resultText").textContent = text;
 
@@ -635,11 +678,14 @@
       const { data: players } = await db.from("players").select("id").eq("room_code", roomCode);
       const { data: room } = await db.from("rooms").select("roles").eq("code", roomCode).single();
 
-      // On mélange les joueurs : le 1er est la Taupe, le 2e le Blaireau si l'hôte l'a activé
+      // On mélange les joueurs : le 1er est la Taupe, les suivants reçoivent les rôles activés par l'hôte
       const shuffled = [...players].sort(() => Math.random() - 0.5);
       await db.from("players").update({ role: "mole" }).eq("id", shuffled[0].id);
-      if ((room.roles || []).includes("badger") && shuffled.length > 1) {
-        await db.from("players").update({ role: "badger" }).eq("id", shuffled[1].id);
+      const extras = Object.keys(ROLES).filter(
+        (id) => ROLES[id].optional && (room.roles || []).includes(id)
+      );
+      for (let i = 0; i < extras.length && i + 1 < shuffled.length; i++) {
+        await db.from("players").update({ role: extras[i] }).eq("id", shuffled[i + 1].id);
       }
       await db.from("rooms").update({ status: "playing" }).eq("code", roomCode);
     });
@@ -649,6 +695,7 @@
       const roleEl = $("role");
       if (!roleEl.hidden) {
         roleEl.hidden = true;
+        $("vaneSide").hidden = true;
         $("toggleRole").textContent = "Voir mon rôle";
       } else {
         const r = ROLES[myRole] || ROLES.crew;
@@ -656,6 +703,13 @@
         roleEl.className = ROLES[myRole] ? myRole : "crew";
         roleEl.hidden = false;
         $("toggleRole").textContent = "Cacher mon rôle";
+        if (myRole === "vane") {
+          $("vaneSide").hidden = false;
+          renderVane();
+          // C'est un clic : on prépare le son et on demande l'autorisation des notifications
+          unlockAudio();
+          askNotificationPermission();
+        }
       }
     });
 
@@ -664,12 +718,12 @@
       // Victoire ou défaite : le vote a lieu dans les deux cas
       await db
         .from("rooms")
-        .update({ status: "voting", result: "win" })
+        .update({ status: "voting", result: "win", game_ended_at: new Date().toISOString() })
         .eq("code", roomCode)
         .eq("status", "playing");
     });
     $("loss").addEventListener("click", async () => {
-      await db.from("rooms").update({ status: "voting", result: "loss" }).eq("code", roomCode);
+      await db.from("rooms").update({ status: "voting", result: "loss", game_ended_at: new Date().toISOString() }).eq("code", roomCode);
     });
 
     // Un joueur vote (la table interdit un second vote du même joueur)
@@ -684,7 +738,10 @@
     $("again").addEventListener("click", async () => {
       await db.from("votes").delete().eq("room_code", roomCode);
       await db.from("players").update({ role: "crew" }).eq("room_code", roomCode);
-      await db.from("rooms").update({ status: "lobby", result: null }).eq("code", roomCode);
+      await db
+        .from("rooms")
+        .update({ status: "lobby", result: null, game_started_at: null, game_ended_at: null, vane_sides: [] })
+        .eq("code", roomCode);
     });
 
     // ---------- Points ----------
@@ -702,15 +759,20 @@
       badger: {
         name: "Le Blaireau", optional: true,
         desc: "Faites gagner l'équipe, mais faites-vous passer pour la Taupe : vous gagnez si l'équipe gagne et que vous recevez plus de voix qu'elle."
+      },
+      vane: {
+        name: "La Girouette", optional: true,
+        desc: "À chaque tirage, vous avez une chance sur deux de changer de camp (équipe ou Taupe). Seul compte votre camp à la fin de la partie : vous gagnez si vous finissez côté équipe et que la partie est gagnée, ou côté Taupe et que la partie est perdue. Une alerte vous indique votre camp à chaque tirage."
       }
     };
 
     // Barème : à ajuster ici après les tests si le jeu paraît déséquilibré
     const POINTS = {
-      teamWin: 1,    // partie gagnée : chaque joueur sauf la Taupe
+      teamWin: 1,    // partie gagnée : chaque joueur sauf la Taupe (et la Girouette finie côté Taupe)
       voteHit: 1,    // chaque joueur qui a voté pour la Taupe, victoire ou défaite (si démasquée)
       moleWin: 2,    // partie perdue, Taupe non démasquée (égalité comprise)
-      badgerWin: 2   // bonus du Blaireau : partie gagnée et plus de voix que la Taupe
+      badgerWin: 2,  // bonus du Blaireau : partie gagnée et plus de voix que la Taupe
+      vaneWin: 2     // bonus de la Girouette : son camp final correspond au résultat de la partie
     };
 
     // L'hôte active ou désactive un rôle optionnel
@@ -722,9 +784,10 @@
     }
 
     // Calcule qui gagne combien de points, sans rien écrire dans la base
-    function computePoints(result, players, votes) {
+    function computePoints(result, players, votes, vaneSide = "team") {
       const mole = players.find((p) => p.role === "mole");
       const badger = players.find((p) => p.role === "badger");
+      const vane = players.find((p) => p.role === "vane");
 
       // Nombre de voix reçues par chaque joueur
       const counts = {};
@@ -741,12 +804,18 @@
       const add = (id, n) => { gains[id] = (gains[id] || 0) + n; };
       let badgerWon = false;
 
+      // Une Girouette qui finit côté Taupe alors que l'équipe gagne a perdu : pas le point de victoire
+      // (elle garde en revanche le point d'avoir désigné la Taupe)
+      const vaneLost = (id) => vane && id === vane.id && result === "win" && vaneSide === "mole";
+
       const rewardVoters = () => {
-        for (const v of votes) if (mole && v.target_id === mole.id) add(v.voter_id, POINTS.voteHit);
+        for (const v of votes) {
+          if (mole && v.target_id === mole.id) add(v.voter_id, POINTS.voteHit);
+        }
       };
 
       if (result === "win") {
-        for (const p of players) if (p.role !== "mole") add(p.id, POINTS.teamWin);
+        for (const p of players) if (p.role !== "mole" && !vaneLost(p.id)) add(p.id, POINTS.teamWin);
         rewardVoters();
         // Le Blaireau réussit s'il reçoit STRICTEMENT plus de voix que la Taupe
         if (badger && (counts[badger.id] || 0) > moleVotes) {
@@ -757,7 +826,13 @@
         if (caught) rewardVoters();
         else add(mole.id, POINTS.moleWin);
       }
-      return { mole, badger, counts, caught, badgerWon, gains };
+      // La Girouette gagne selon son camp final : équipe si la partie est gagnée, Taupe si elle est perdue
+      let vaneWon = false;
+      if (vane) {
+        vaneWon = (vaneSide === "team" && result === "win") || (vaneSide === "mole" && result === "loss");
+        if (vaneWon) add(vane.id, POINTS.vaneWin);
+      }
+      return { mole, badger, vane, counts, caught, badgerWon, vaneWon, vaneSide, gains };
     }
 
     // Ajoute les points au score de chaque joueur (appelé une seule fois, par l'hôte)
@@ -772,7 +847,12 @@
         .eq("room_code", roomCode);
       if (!players || !votes) return;
 
-      const { gains } = computePoints(result, players, votes);
+      const { data: room } = await db
+        .from("rooms")
+        .select("game_started_at, game_ended_at, vane_interval, vane_sides")
+        .eq("code", roomCode)
+        .single();
+      const { gains } = computePoints(result, players, votes, room ? vaneFinalSide(room) : "team");
       await Promise.all(
         players
           .filter((p) => gains[p.id])
@@ -967,6 +1047,104 @@
           `son : ${labels[mode]}${voiceInfo}). L'avez-vous vue ou entendue ?`;
         $("testAlert").disabled = false;
       }, 500);
+    });
+
+    // ---------- La Girouette ----------
+
+    const sideLabel = (side) => (side === "team" ? "l'équipe" : "la Taupe");
+    const currentPermission = () => ("Notification" in window ? Notification.permission : "unsupported");
+
+    // L'hôte choisit la fréquence des tirages
+    async function setVaneInterval(minutes) {
+      await db.from("rooms").update({ vane_interval: minutes }).eq("code", roomCode);
+    }
+
+    // Planning tiré à l'avance : à chaque tirage, une chance sur deux de changer de camp
+    function makeVaneSchedule(intervalMinutes) {
+      const ticks = Math.ceil(90 / intervalMinutes); // de quoi couvrir 90 minutes de partie
+      const sides = [];
+      let side = "team"; // la Girouette commence du côté de l'équipe
+      for (let i = 0; i < ticks; i++) {
+        if (Math.random() < 0.5) side = (side === "team") ? "mole" : "team";
+        sides.push(side);
+      }
+      return sides;
+    }
+
+    // Numéro du tirage atteint à un instant donné (0 = avant le premier tirage)
+    function vaneTickAt(room, time) {
+      const started = new Date(room.game_started_at).getTime();
+      return Math.max(0, Math.floor((time - started) / (room.vane_interval * 60000)));
+    }
+
+    function vaneSideAtTick(room, tick) {
+      const sides = room.vane_sides || [];
+      if (tick <= 0 || sides.length === 0) return "team";
+      return sides[Math.min(tick, sides.length) - 1];
+    }
+
+    // Camp de la Girouette au moment où l'hôte a indiqué la fin de la partie
+    function vaneFinalSide(room) {
+      if (!room.game_started_at || !room.game_ended_at) return "team";
+      return vaneSideAtTick(room, vaneTickAt(room, new Date(room.game_ended_at).getTime()));
+    }
+
+    let vaneRoom = null;
+    let vaneTimer = null;
+    let vaneLastTick = 0;
+
+    // Affiche le camp actuel (visible seulement quand la Girouette a révélé son rôle)
+    function renderVane() {
+      if (!vaneRoom) return;
+      const el = $("vaneSide");
+      if (!vaneRoom.game_started_at) {
+        el.className = "team";
+        el.textContent = "Camp actuel : L'ÉQUIPE (en attente du début de la partie)";
+        return;
+      }
+      const side = vaneSideAtTick(vaneRoom, vaneTickAt(vaneRoom, Date.now()));
+      el.className = side;
+      el.textContent = `Camp actuel : ${side === "team" ? "L'ÉQUIPE" : "LA TAUPE"}`;
+    }
+
+    function stopVane() {
+      if (vaneTimer) { clearInterval(vaneTimer); vaneTimer = null; }
+      vaneRoom = null;
+    }
+
+    // Appelé à chaque rafraîchissement : lance la surveillance des tirages pour la Girouette
+    function updateVane(room) {
+      if (myRole !== "vane" || !room.game_started_at) { stopVane(); return; }
+      vaneRoom = room;
+      if (!vaneTimer) {
+        vaneLastTick = vaneTickAt(room, Date.now()); // pas d'annonce après un simple rechargement
+        vaneTimer = setInterval(vaneLoop, 1000);
+      }
+      renderVane();
+    }
+
+    // Chaque seconde : un nouveau tirage est-il arrivé ? Si oui, on annonce le camp
+    function vaneLoop() {
+      if (!vaneRoom) return;
+      const tick = vaneTickAt(vaneRoom, Date.now());
+      if (tick > vaneLastTick) {
+        const before = vaneSideAtTick(vaneRoom, tick - 1);
+        const after = vaneSideAtTick(vaneRoom, tick);
+        const verb = (before === after) ? "restez" : "passez";
+        fireAlert(`Vous ${verb} du côté de ${sideLabel(after)}.`, currentPermission());
+        vaneLastTick = tick;
+      }
+      renderVane();
+    }
+
+    // L'hôte lance le compte à rebours quand la partie de LoL commence réellement
+    $("startGame").addEventListener("click", async () => {
+      const { data: room } = await db.from("rooms").select("vane_interval").eq("code", roomCode).single();
+      await db
+        .from("rooms")
+        .update({ game_started_at: new Date().toISOString(), vane_sides: makeVaneSchedule(room.vane_interval) })
+        .eq("code", roomCode)
+        .is("game_started_at", null);
     });
 
     // ---------- Thème clair / sombre ----------
