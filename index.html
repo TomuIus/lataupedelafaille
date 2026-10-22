@@ -274,11 +274,10 @@
     <ul id="roleList"></ul>
     <h3>Tester les alertes</h3>
     <p class="res-legend">Cliquez sur le bouton, puis retournez sur LoL : l'alerte arrive après quelques secondes.</p>
-    <label class="opt">Son :
+    <label class="opt">Alertes :
       <select id="soundMode">
         <option value="voice">Voix</option>
-        <option value="beep">Bip</option>
-        <option value="off">Aucun</option>
+        <option value="off">Silence</option>
       </select>
     </label>
     <button id="testAlert">Tester l'alerte</button>
@@ -295,6 +294,12 @@
     <button id="toggleRole">Voir mon rôle</button>
     <p id="role" hidden></p>
     <div id="vaneSide" hidden></div>
+    <label class="opt">Alertes :
+      <select id="soundModeGame">
+        <option value="voice">Voix</option>
+        <option value="off">Silence</option>
+      </select>
+    </label>
     <div id="hostButtons" hidden>
       <button id="startGame" hidden>La partie de LoL a commencé</button>
       <p id="vaneStarted" hidden>⏱️ Compte à rebours de la Girouette lancé.</p>
@@ -706,8 +711,7 @@
         if (myRole === "vane") {
           $("vaneSide").hidden = false;
           renderVane();
-          // C'est un clic : on prépare le son et on demande l'autorisation des notifications
-          unlockAudio();
+          // C'est un clic : on demande l'autorisation des notifications
           askNotificationPermission();
         }
       }
@@ -769,7 +773,7 @@
     // Barème : à ajuster ici après les tests si le jeu paraît déséquilibré
     const POINTS = {
       teamWin: 1,    // partie gagnée : chaque joueur sauf la Taupe (et la Girouette finie côté Taupe)
-      voteHit: 1,    // chaque joueur qui a voté pour la Taupe, victoire ou défaite (si démasquée)
+      voteHit: 1,    // chaque joueur qui a voté pour la Taupe, dans tous les cas (démasquée ou non)
       moleWin: 2,    // partie perdue, Taupe non démasquée (égalité comprise)
       badgerWin: 2,  // bonus du Blaireau : partie gagnée et plus de voix que la Taupe
       vaneWin: 2     // bonus de la Girouette : son camp final correspond au résultat de la partie
@@ -823,8 +827,8 @@
           add(badger.id, POINTS.badgerWin);
         }
       } else if (mole) {
-        if (caught) rewardVoters();
-        else add(mole.id, POINTS.moleWin);
+        rewardVoters();
+        if (!caught) add(mole.id, POINTS.moleWin);
       }
       // La Girouette gagne selon son camp final : équipe si la partie est gagnée, Taupe si elle est perdue
       let vaneWon = false;
@@ -922,40 +926,23 @@
 
     const ALERT_DELAY_SECONDS = 5;     // test : temps pour revenir sur LoL après le clic
     const NOTIFICATION_SECONDS = 20;   // durée d'affichage de la notification
-    const SOUND_KEY = "imposteur-lol-sound";   // "voice", "beep" ou "off"
-    const SOUND_MODES = ["voice", "beep", "off"];
+    const SOUND_KEY = "imposteur-lol-sound";   // "voice" ou "off"
+    const SOUND_MODES = ["voice", "off"];
 
-    // Le réglage du son est mémorisé dans le navigateur de chaque joueur
-    let savedSound = null;
-    try { savedSound = localStorage.getItem(SOUND_KEY); } catch (e) {}
-    $("soundMode").value = SOUND_MODES.includes(savedSound) ? savedSound : "voice";
-    $("soundMode").addEventListener("change", () => {
-      try { localStorage.setItem(SOUND_KEY, $("soundMode").value); } catch (e) {}
-    });
-
-    // Le navigateur n'autorise le son qu'après un clic : on prépare l'audio pendant un clic
-    let audioCtx = null;
-    function unlockAudio() {
-      try {
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        audioCtx.resume();
-      } catch (e) { console.error(e); }
-    }
-
-    // Bip généré par le navigateur : aucun fichier audio à héberger
-    function playBeep(frequency) {
-      if (!audioCtx) return;
-      try {
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.type = "sine";
-        osc.frequency.value = frequency;
-        gain.gain.value = 0.25;
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        osc.start();
-        osc.stop(audioCtx.currentTime + 0.5);
-      } catch (e) { console.error(e); }
+    // Le réglage est mémorisé dans le navigateur de chaque joueur, et modifiable aussi pendant la partie
+    let soundMode = "voice";
+    try {
+      const saved = localStorage.getItem(SOUND_KEY);
+      if (SOUND_MODES.includes(saved)) soundMode = saved;
+    } catch (e) {}
+    for (const id of ["soundMode", "soundModeGame"]) {
+      $(id).value = soundMode;
+      $(id).addEventListener("change", () => {
+        soundMode = $(id).value;
+        $("soundMode").value = soundMode;
+        $("soundModeGame").value = soundMode;
+        try { localStorage.setItem(SOUND_KEY, soundMode); } catch (e) {}
+      });
     }
 
     // Voix de synthèse du navigateur
@@ -1001,9 +988,7 @@
     // Envoie une alerte : notification (texte) + son selon le réglage du joueur.
     // Pensé pour être réutilisé par d'autres rôles : fireAlert("Message à afficher et à dire", permission)
     function fireAlert(message, permission) {
-      const mode = $("soundMode").value;
-      if (mode === "voice") speak(message);
-      else if (mode === "beep") playBeep(660);
+      if (soundMode === "voice") speak(message);
 
       if (permission === "granted") {
         try {
@@ -1017,7 +1002,6 @@
     $("testAlert").addEventListener("click", async () => {
       // Ce qui demande un clic de l'utilisateur (permission, audio) se fait maintenant
       const permission = await askNotificationPermission();
-      unlockAudio();
 
       $("testAlert").disabled = true;
       const end = Date.now() + ALERT_DELAY_SECONDS * 1000;
@@ -1032,8 +1016,8 @@
 
         fireAlert("Test : vous passez du côté de l'équipe.", permission);
 
-        const labels = { voice: "voix", beep: "bip", off: "aucun" };
-        const mode = $("soundMode").value;
+        const labels = { voice: "voix", off: "silence" };
+        const mode = soundMode;
         let voiceInfo = "";
         if (mode === "voice") {
           voiceInfo = !("speechSynthesis" in window)
