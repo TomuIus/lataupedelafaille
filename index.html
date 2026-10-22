@@ -840,7 +840,7 @@
 
     // ---------- Alertes (notification + son) ----------
 
-    const ALERT_DELAY_SECONDS = 10;    // test : temps pour revenir sur LoL après le clic
+    const ALERT_DELAY_SECONDS = 5;     // test : temps pour revenir sur LoL après le clic
     const NOTIFICATION_SECONDS = 20;   // durée d'affichage de la notification
     const SOUND_KEY = "imposteur-lol-sound";   // "voice", "beep" ou "off"
     const SOUND_MODES = ["voice", "beep", "off"];
@@ -878,14 +878,37 @@
       } catch (e) { console.error(e); }
     }
 
-    // Voix de synthèse du navigateur (en français si une voix française est installée)
+    // Voix de synthèse du navigateur
+    let frenchVoice = null;   // la voix française trouvée sur l'appareil, s'il y en a une
+    let lastUtterance = null; // garder une référence évite que le navigateur la supprime en cours de lecture
+
+    function loadVoices() {
+      const voices = speechSynthesis.getVoices();
+      frenchVoice = voices.find((v) => v.lang.toLowerCase().startsWith("fr")) || null;
+    }
+    if ("speechSynthesis" in window) {
+      loadVoices();
+      // La liste des voix se charge parfois après le démarrage de la page
+      speechSynthesis.addEventListener("voiceschanged", loadVoices);
+    }
+
     function speak(text) {
       if (!("speechSynthesis" in window)) return;
+      // Appeler cancel() juste avant speak() peut empêcher la lecture dans Chrome :
+      // on ne l'appelle que si une lecture est réellement en cours
+      if (speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel();
+
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = "fr-FR";
-      const french = speechSynthesis.getVoices().find((v) => v.lang.toLowerCase().startsWith("fr"));
-      if (french) utterance.voice = french;
-      speechSynthesis.cancel();
+      utterance.volume = 1;
+      utterance.rate = 1;
+      if (frenchVoice) utterance.voice = frenchVoice;
+      utterance.onerror = (e) => {
+        console.error(e);
+        $("alertStatus").textContent += ` Erreur de voix : ${e.error}.`;
+      };
+      lastUtterance = utterance;
+      speechSynthesis.resume();
       speechSynthesis.speak(utterance);
     }
 
@@ -930,9 +953,18 @@
         fireAlert("Test : vous passez du côté de l'équipe.", permission);
 
         const labels = { voice: "voix", beep: "bip", off: "aucun" };
+        const mode = $("soundMode").value;
+        let voiceInfo = "";
+        if (mode === "voice") {
+          voiceInfo = !("speechSynthesis" in window)
+            ? " : voix non prise en charge par ce navigateur"
+            : frenchVoice
+              ? ` : ${frenchVoice.name}`
+              : " : aucune voix française trouvée";
+        }
         $("alertStatus").textContent =
           `Alerte envoyée (notification : ${permission === "granted" ? "oui" : "non autorisée"}, ` +
-          `son : ${labels[$("soundMode").value]}). L'avez-vous vue ou entendue ?`;
+          `son : ${labels[mode]}${voiceInfo}). L'avez-vous vue ou entendue ?`;
         $("testAlert").disabled = false;
       }, 500);
     });
