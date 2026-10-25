@@ -144,6 +144,11 @@
     #vaneSide.team { background: #4cc9f0; color: #2b2d42; }
     #vaneSide.mole { background: #ff5d73; color: #fff; }
 
+    #checkText { margin-top: 0; font-weight: 700; }
+    #checkButtons { display: flex; gap: 12px; margin-bottom: 8px; }
+    #checkButtons .yes { background: #06d6a0; color: #2b2d42; }
+    #checkButtons .no { background: #ff5d73; color: #fff; }
+
     /* Test des alertes */
     .opt { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-weight: 700; }
     .opt input { width: 24px; height: 24px; flex: none; accent-color: #ff5d9e; }
@@ -162,6 +167,7 @@
     #role.mole { background: #ff5d73; color: #fff; }
     #role.badger { background: #ffd166; color: #2b2d42; }
     #role.vane { background: #b185db; color: #fff; }
+    #role.boar { background: #ff9f1c; color: #2b2d42; }
     #role.crew { background: #4cc9f0; color: #2b2d42; }
     #hostButtons {
       display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; padding-top: 18px;
@@ -186,6 +192,7 @@
     .badge.badger { background: #ffd166; }
     .badge.crew { background: #4cc9f0; }
     .badge.vane { background: #b185db; color: #fff; }
+    .badge.boar { background: #ff9f1c; }
 
     #resultText { font-size: 1.3rem; font-weight: 700; line-height: 1.4; }
     #voteResult li, #ranking li {
@@ -323,6 +330,11 @@
     <h3>Les rôles et les votes</h3>
     <p class="res-legend">✅ a désigné la Taupe · ❌ s'est trompé</p>
     <ul id="voteResult"></ul>
+    <div id="checkBox" hidden>
+      <h3>Vérification</h3>
+      <p id="checkText"></p>
+      <div id="checkButtons"></div>
+    </div>
     <h3>Classement du salon</h3>
     <ul id="ranking"></ul>
     <button id="again" hidden>Nouvelle partie</button>
@@ -443,6 +455,9 @@
         .on("postgres_changes",
             { event: "*", schema: "public", table: "votes", filter: `room_code=eq.${code}` },
             refresh)
+        .on("postgres_changes",
+            { event: "*", schema: "public", table: "checks", filter: `room_code=eq.${code}` },
+            refresh)
         // Les suppressions ne peuvent pas être filtrées : on les écoute toutes,
         // et refresh() relit simplement l'état de notre salon
         .on("postgres_changes",
@@ -474,7 +489,11 @@
         .from("votes")
         .select("voter_id, target_id")
         .eq("room_code", roomCode);
-      if (!players || !votes) return;
+      const { data: checks } = await db
+        .from("checks")
+        .select("voter_id, kind, answer")
+        .eq("room_code", roomCode);
+      if (!players || !votes || !checks) return;
 
       // Si l'on n'est plus dans la liste des joueurs, on a été retiré du salon
       if (!players.some((p) => p.id === myId)) {
@@ -605,8 +624,22 @@
       }
 
       if (room.status === "finished") {
+        const verdict = boarVerdict(players, checks);
+
+        // Quand tous ont répondu, l'hôte (une seule fois) accorde le bonus du Sanglier s'il est confirmé
+        if (isHost && verdict && room.result === "win" && verdict.done && !room.bonus_scored) {
+          const { data: locked } = await db
+            .from("rooms")
+            .update({ bonus_scored: true })
+            .eq("code", roomCode)
+            .eq("bonus_scored", false)
+            .select();
+          if (locked && locked.length && verdict.success) await awardBonus(verdict.boar.id, POINTS.boarWin);
+        }
+
+        const boarOk = (verdict && room.result === "win" && verdict.done) ? verdict.success : null;
         const { mole, badger, vane, counts, caught, badgerWon, vaneWon, vaneSide, gains } =
-          computePoints(room.result, players, votes, vaneFinalSide(room));
+          computePoints(room.result, players, votes, vaneFinalSide(room), boarOk);
         const moleName = mole ? mole.pseudo : "?";
 
         let text = room.result === "win"
@@ -626,6 +659,10 @@
         if (vane) {
           text += ` ${vane.pseudo} était la Girouette, finie du côté de ${sideLabel(vaneSide)} : ` +
                   (vaneWon ? "elle gagne !" : "elle perd.");
+        }
+        if (verdict) {
+          text += ` ${verdict.boar.pseudo} était le Sanglier` +
+                  (room.result === "win" ? "." : " : l'équipe a perdu, il ne gagne pas.");
         }
         $("resultText").textContent = text;
 
@@ -657,6 +694,33 @@
 
           li.append(head, detail);
           $("voteResult").appendChild(li);
+        }
+
+        // Vérification du Sanglier : seulement si l'équipe a gagné
+        $("checkBox").hidden = !(verdict && room.result === "win");
+        if (!$("checkBox").hidden) {
+          $("checkButtons").innerHTML = "";
+          const iAmBoar = (verdict.boar.id === myId);
+          const answered = checks.some((c) => c.kind === "boar" && c.voter_id === myId);
+          if (verdict.done) {
+            $("checkText").textContent =
+              `${verdict.boar.pseudo} ${verdict.success ? "a" : "n'a pas"} rempli sa condition ` +
+              `(${verdict.yes} oui, ${verdict.no} non)` +
+              (verdict.success ? ` : +${POINTS.boarWin} points.` : ".");
+          } else if (iAmBoar || answered) {
+            $("checkText").textContent =
+              `Vérification en cours : ${verdict.answered} / ${verdict.voters} réponses.`;
+          } else {
+            $("checkText").textContent =
+              `${verdict.boar.pseudo} avait-il à la fois le plus de morts et le plus de dégâts parmi les 10 joueurs ?`;
+            for (const [label, value, cls] of [["Oui", true, "yes"], ["Non", false, "no"]]) {
+              const b = document.createElement("button");
+              b.className = cls;
+              b.textContent = label;
+              b.addEventListener("click", () => answerCheck(value));
+              $("checkButtons").appendChild(b);
+            }
+          }
         }
 
         // Classement cumulé du salon, avec les points gagnés pendant cette partie
@@ -741,10 +805,11 @@
     // Nouvelle partie : on efface votes, rôles et résultat, et on revient au salon
     $("again").addEventListener("click", async () => {
       await db.from("votes").delete().eq("room_code", roomCode);
+      await db.from("checks").delete().eq("room_code", roomCode);
       await db.from("players").update({ role: "crew" }).eq("room_code", roomCode);
       await db
         .from("rooms")
-        .update({ status: "lobby", result: null, game_started_at: null, game_ended_at: null, vane_sides: [] })
+        .update({ status: "lobby", result: null, game_started_at: null, game_ended_at: null, vane_sides: [], bonus_scored: false })
         .eq("code", roomCode);
     });
 
@@ -767,6 +832,10 @@
       vane: {
         name: "La Girouette", optional: true,
         desc: "À chaque tirage, vous avez une chance sur deux de changer de camp (équipe ou Taupe). Seul compte votre camp à la fin de la partie : vous gagnez si vous finissez côté équipe et que la partie est gagnée, ou côté Taupe et que la partie est perdue. Une alerte vous indique votre camp à chaque tirage."
+      },
+      boar: {
+        name: "Le Sanglier", optional: true,
+        desc: "Faites gagner l'équipe en ayant à la fois le plus de morts et le plus de dégâts infligés parmi les 10 joueurs de la partie. À la fin, les autres joueurs confirment si vous avez rempli la condition."
       }
     };
 
@@ -776,7 +845,8 @@
       voteHit: 1,    // chaque joueur qui a voté pour la Taupe, dans tous les cas (démasquée ou non)
       moleWin: 2,    // partie perdue, Taupe non démasquée (égalité comprise)
       badgerWin: 2,  // bonus du Blaireau : partie gagnée et plus de voix que la Taupe
-      vaneWin: 2     // bonus de la Girouette : son camp final correspond au résultat de la partie
+      vaneWin: 2,    // bonus de la Girouette : son camp final correspond au résultat de la partie
+      boarWin: 2     // bonus du Sanglier : partie gagnée et condition confirmée par les autres joueurs
     };
 
     // L'hôte active ou désactive un rôle optionnel
@@ -788,7 +858,7 @@
     }
 
     // Calcule qui gagne combien de points, sans rien écrire dans la base
-    function computePoints(result, players, votes, vaneSide = "team") {
+    function computePoints(result, players, votes, vaneSide = "team", boarOk = null) {
       const mole = players.find((p) => p.role === "mole");
       const badger = players.find((p) => p.role === "badger");
       const vane = players.find((p) => p.role === "vane");
@@ -830,6 +900,10 @@
         rewardVoters();
         if (!caught) add(mole.id, POINTS.moleWin);
       }
+      // Le Sanglier : bonus seulement si l'équipe gagne ET que les autres ont confirmé sa condition
+      const boar = players.find((p) => p.role === "boar");
+      if (boar && boarOk === true && result === "win") add(boar.id, POINTS.boarWin);
+
       // La Girouette gagne selon son camp final : équipe si la partie est gagnée, Taupe si elle est perdue
       let vaneWon = false;
       if (vane) {
@@ -862,6 +936,42 @@
           .filter((p) => gains[p.id])
           .map((p) => db.from("players").update({ score: p.score + gains[p.id] }).eq("id", p.id))
       );
+    }
+
+    // ---------- Vérification par les joueurs (Sanglier) ----------
+
+    // Résume les réponses « oui / non » des joueurs sur la condition du Sanglier
+    function boarVerdict(players, checks) {
+      const boar = players.find((p) => p.role === "boar");
+      if (!boar) return null;
+      const voters = players.filter((p) => p.id !== boar.id);
+      const answers = checks.filter(
+        (c) => c.kind === "boar" && voters.some((v) => v.id === c.voter_id)
+      );
+      const yes = answers.filter((c) => c.answer).length;
+      return {
+        boar,
+        voters: voters.length,
+        answered: answers.length,
+        yes,
+        no: answers.length - yes,
+        done: answers.length >= voters.length,
+        // Règle : en cas d'égalité, la condition compte comme remplie
+        success: yes * 2 >= voters.length
+      };
+    }
+
+    async function answerCheck(value) {
+      const { error } = await db
+        .from("checks")
+        .insert({ room_code: roomCode, voter_id: myId, kind: "boar", answer: value });
+      if (error) console.error(error);
+    }
+
+    // Ajoute des points à un joueur (utilisé pour les bonus décidés après la fin du vote)
+    async function awardBonus(playerId, points) {
+      const { data: p } = await db.from("players").select("score").eq("id", playerId).single();
+      if (p) await db.from("players").update({ score: p.score + points }).eq("id", playerId);
     }
 
     // ---------- Quitter, fermer, retirer (salle d'attente uniquement) ----------
