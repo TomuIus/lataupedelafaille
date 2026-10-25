@@ -198,6 +198,7 @@
     .res-legend { margin: 0 0 10px; font-size: .9rem; opacity: .8; }
     .res-head { display: flex; align-items: center; gap: 10px; font-size: 1.05rem; }
     .res-detail { margin-top: 3px; font-size: .9rem; font-weight: 400; }
+    .res-points { margin-top: 3px; font-size: .85rem; font-weight: 700; opacity: .85; }
     .badge {
       font-size: .8rem; padding: 2px 10px; color: #2b2d42;
       border: 2px solid var(--line); border-radius: 999px;
@@ -211,7 +212,7 @@
     .badge.monkey { background: #d9a066; }
     .badge.bulldog { background: #8d99ae; color: #fff; }
 
-    #resultText { font-size: 1.3rem; font-weight: 700; line-height: 1.4; }
+    #resultText { font-size: 1.3rem; font-weight: 700; line-height: 1.5; white-space: pre-line; }
     #voteResult li, #ranking li {
       margin-bottom: 8px; padding: 8px 14px; font-weight: 700;
       background: var(--paper); border: 2px solid var(--line); border-radius: 12px;
@@ -562,7 +563,7 @@
           const li = document.createElement("li");
           const box = document.createElement("div");
           const name = document.createElement("div");
-          name.className = "role-name"; name.textContent = r.name;
+          name.className = "role-name"; name.textContent = `${r.icon} ${r.name}`;
           const desc = document.createElement("div");
           desc.className = "role-desc"; desc.textContent = r.desc;
           box.append(name, desc);
@@ -693,7 +694,7 @@
 
         const verified = {};
         if (allDone) for (const v of verdicts) verified[v.roleId] = v.success;
-        const { mole, badger, vane, counts, caught, badgerWon, vaneWon, vaneSide, gains } =
+        const { mole, badger, vane, counts, caught, badgerWon, vaneWon, vaneSide, gains, reasons } =
           computePoints(room.result, players, votes, vaneFinalSide(room), verified);
         const moleName = mole ? mole.pseudo : "?";
 
@@ -704,21 +705,21 @@
             : `Défaite. ${moleName} était la Taupe et elle n'a pas été démasquée : la Taupe gagne.`;
         if (badger) {
           if (room.result !== "win") {
-            text += ` ${badger.pseudo} était le Blaireau : l'équipe a perdu, il ne gagne pas.`;
+            text += `\n${ROLES.badger.icon} ${badger.pseudo} était le Blaireau : l'équipe a perdu, il ne gagne pas.`;
           } else if (badgerWon) {
-            text += ` ${badger.pseudo} était le Blaireau et a réussi à passer pour la Taupe !`;
+            text += `\n${ROLES.badger.icon} ${badger.pseudo} était le Blaireau et a réussi à passer pour la Taupe !`;
           } else {
-            text += ` ${badger.pseudo} était le Blaireau, mais il n'a pas assez trompé l'équipe.`;
+            text += `\n${ROLES.badger.icon} ${badger.pseudo} était le Blaireau, mais il n'a pas assez trompé l'équipe.`;
           }
         }
         if (vane) {
-          text += ` ${vane.pseudo} était la Girouette, finie du côté de ${sideLabel(vaneSide)} : ` +
+          text += `\n${ROLES.vane.icon} ${vane.pseudo} était la Girouette, finie du côté de ${sideLabel(vaneSide)} : ` +
                   (vaneWon ? "elle gagne !" : "elle perd.");
         }
         for (const id of VERIFIED_ROLES) {
           const holder = players.find((p) => p.role === id);
           if (!holder) continue;
-          text += ` ${holder.pseudo} était ${ROLES[id].name.replace(/^L/, "l")}`;
+          text += `\n${ROLES[id].icon} ${holder.pseudo} était ${ROLES[id].name.replace(/^L/, "l")}`;
           if (id === "swan") {
             const loved = players.find((p) => p.id === holder.loved_id);
             if (loved) text += ` (aimé : ${loved.pseudo})`;
@@ -727,7 +728,7 @@
         }
         const bulldogPlayer = players.find((p) => p.role === "bulldog");
         if (bulldogPlayer) {
-          text += ` ${bulldogPlayer.pseudo} était le Bouledogue : ` +
+          text += `\n${ROLES.bulldog.icon} ${bulldogPlayer.pseudo} était le Bouledogue : ` +
                   (room.result === "win"
                     ? `l'équipe a gagné, +${POINTS.bulldogWin} points !`
                     : `l'équipe a perdu, -${POINTS.bulldogLoss} point.`);
@@ -745,7 +746,8 @@
           name.textContent = p.pseudo;
           const badge = document.createElement("span");
           badge.className = "badge " + (ROLES[p.role] ? p.role : "crew");
-          badge.textContent = (ROLES[p.role] || ROLES.crew).name;
+          const shown = ROLES[p.role] || ROLES.crew;
+          badge.textContent = `${shown.icon} ${shown.name}`;
           head.append(name, badge);
 
           // Pour qui a-t-il voté ? Et a-t-il vu juste ? (la Taupe ne peut pas se désigner : pas de verdict)
@@ -760,7 +762,15 @@
           detail.className = "res-detail";
           detail.textContent = `${voteText} · reçoit ${counts[p.id] || 0} vote(s)`;
 
-          li.append(head, detail);
+          // Le détail des points gagnés pendant cette partie
+          const why = reasons[p.id] || [];
+          const pts = document.createElement("div");
+          pts.className = "res-points";
+          pts.textContent = why.length
+            ? why.map((r) => `${r.pts > 0 ? "+" : ""}${r.pts} ${r.label}`).join(" · ")
+            : "aucun point";
+
+          li.append(head, detail, pts);
           $("voteResult").appendChild(li);
         }
 
@@ -773,7 +783,7 @@
             const item = document.createElement("div");
             const line = document.createElement("p");
             line.className = "check-text";
-            const name = `${v.holder.pseudo} (${ROLES[v.roleId].name})`;
+            const name = `${v.holder.pseudo} (${ROLES[v.roleId].icon} ${ROLES[v.roleId].name})`;
             const answered = checks.some((c) => c.kind === v.roleId && c.voter_id === myId);
 
             if (v.done) {
@@ -886,7 +896,7 @@
         $("toggleRole").textContent = "Voir mon rôle";
       } else {
         const r = ROLES[myRole] || ROLES.crew;
-        roleEl.textContent = `Vous êtes ${r.name.toUpperCase()} : ${r.desc}`;
+        roleEl.textContent = `Vous êtes ${r.icon} ${r.name.toUpperCase()} : ${r.desc}`;
         roleEl.className = ROLES[myRole] ? myRole : "crew";
         if (myRole === "swan" && myLovedName) {
           roleEl.textContent += ` Votre aimé : ${myLovedName.toUpperCase()}.`;
@@ -951,35 +961,35 @@
     // Catalogue des rôles. Les identifiants (crew, mole, badger) sont ceux stockés en base.
     const ROLES = {
       crew: {
-        name: "Équipier", optional: false,
+        name: "Équipier", icon: "🛡️", optional: false,
         desc: "Gagnez la partie et démasquez la Taupe."
       },
       mole: {
-        name: "La Taupe", optional: false,
+        name: "La Taupe", icon: "🕳️", optional: false,
         desc: "Faites perdre l'équipe sans vous faire repérer. Il y en a toujours une seule."
       },
       badger: {
-        name: "Le Blaireau", optional: true,
+        name: "Le Blaireau", icon: "🦡", optional: true,
         desc: "Faites gagner l'équipe, mais faites-vous passer pour la Taupe : vous gagnez si l'équipe gagne et que vous recevez plus de voix qu'elle."
       },
       vane: {
-        name: "La Girouette", optional: true,
+        name: "La Girouette", icon: "🔄", optional: true,
         desc: "À chaque tirage, vous avez une chance sur deux de changer de camp (équipe ou Taupe). Seul compte votre camp à la fin de la partie : vous gagnez si vous finissez côté équipe et que la partie est gagnée, ou côté Taupe et que la partie est perdue. Une alerte vous indique votre camp à chaque tirage."
       },
       boar: {
-        name: "Le Sanglier", optional: true,
+        name: "Le Sanglier", icon: "🐗", optional: true,
         desc: "Faites gagner l'équipe en ayant à la fois le plus de morts et le plus de dégâts infligés parmi les 10 joueurs de la partie. À la fin, les autres joueurs confirment si vous avez rempli la condition."
       },
       swan: {
-        name: "Le Cygne", optional: true,
+        name: "Le Cygne", icon: "🦢", optional: true,
         desc: "Un joueur tiré au sort, que vous seul connaissez, est votre aimé. S'il meurt dans LoL, vous devez le suivre dans la mort assez rapidement, tout en faisant gagner l'équipe. À la fin, les autres joueurs confirment si vous avez respecté votre consigne."
       },
       monkey: {
-        name: "Le Singe", optional: true,
+        name: "Le Singe", icon: "🐵", optional: true,
         desc: "Pendant la partie, vous recevez régulièrement une mission à réaliser, dans le jeu ou à l'oral, annoncée par la voix. Faites gagner l'équipe tout en réussissant plutôt vos missions : à la fin, les autres joueurs confirment si vous y êtes parvenu."
       },
       bulldog: {
-        name: "Le Bouledogue", optional: true,
+        name: "Le Bouledogue", icon: "🐶", optional: true,
         desc: "Faites gagner l'équipe à tout prix : si elle gagne, vous marquez un gros bonus (+3 points), mais si elle perd, vous perdez 1 point."
       }
     };
@@ -1073,7 +1083,11 @@
       const caught = moleVotes > othersMax;
 
       const gains = {};
-      const add = (id, n) => { gains[id] = (gains[id] || 0) + n; };
+      const reasons = {}; // pour chaque joueur, la liste des points gagnés et pourquoi
+      const add = (id, n, label) => {
+        gains[id] = (gains[id] || 0) + n;
+        (reasons[id] = reasons[id] || []).push({ pts: n, label });
+      };
       let badgerWon = false;
 
       // Une Girouette qui finit côté Taupe alors que l'équipe gagne a perdu : pas le point de victoire
@@ -1082,39 +1096,45 @@
 
       const rewardVoters = () => {
         for (const v of votes) {
-          if (mole && v.target_id === mole.id) add(v.voter_id, POINTS.voteHit);
+          if (mole && v.target_id === mole.id) add(v.voter_id, POINTS.voteHit, "a désigné la Taupe");
         }
       };
 
       if (result === "win") {
-        for (const p of players) if (p.role !== "mole" && !vaneLost(p.id)) add(p.id, POINTS.teamWin);
+        for (const p of players) if (p.role !== "mole" && !vaneLost(p.id)) add(p.id, POINTS.teamWin, "victoire de l'équipe");
         rewardVoters();
         // Le Blaireau réussit s'il reçoit STRICTEMENT plus de voix que la Taupe
         if (badger && (counts[badger.id] || 0) > moleVotes) {
           badgerWon = true;
-          add(badger.id, POINTS.badgerWin);
+          add(badger.id, POINTS.badgerWin, "bonus Blaireau");
         }
       } else if (mole) {
         rewardVoters();
-        if (!caught) add(mole.id, POINTS.moleWin);
+        if (!caught) add(mole.id, POINTS.moleWin, "Taupe non démasquée");
       }
       // Sanglier et Cygne : bonus seulement si l'équipe gagne ET que les autres ont confirmé
       for (const [roleId, pts] of [["boar", POINTS.boarWin], ["swan", POINTS.swanWin], ["monkey", POINTS.monkeyWin]]) {
         const holder = players.find((p) => p.role === roleId);
-        if (holder && verified[roleId] === true && result === "win") add(holder.id, pts);
+        if (holder && verified[roleId] === true && result === "win") {
+          add(holder.id, pts, "bonus " + ROLES[roleId].name.replace(/^(Le|La) /, ""));
+        }
       }
 
       // Le Bouledogue : gros bonus si l'équipe gagne, petit malus si elle perd
       const bulldog = players.find((p) => p.role === "bulldog");
-      if (bulldog) add(bulldog.id, result === "win" ? POINTS.bulldogWin : -POINTS.bulldogLoss);
+      if (bulldog) add(
+        bulldog.id,
+        result === "win" ? POINTS.bulldogWin : -POINTS.bulldogLoss,
+        result === "win" ? "bonus Bouledogue" : "malus Bouledogue"
+      );
 
       // La Girouette gagne selon son camp final : équipe si la partie est gagnée, Taupe si elle est perdue
       let vaneWon = false;
       if (vane) {
         vaneWon = (vaneSide === "team" && result === "win") || (vaneSide === "mole" && result === "loss");
-        if (vaneWon) add(vane.id, POINTS.vaneWin);
+        if (vaneWon) add(vane.id, POINTS.vaneWin, "bonus Girouette");
       }
-      return { mole, badger, vane, counts, caught, badgerWon, vaneWon, vaneSide, gains };
+      return { mole, badger, vane, counts, caught, badgerWon, vaneWon, vaneSide, gains, reasons };
     }
 
     // Ajoute les points au score de chaque joueur (appelé une seule fois, par l'hôte)
