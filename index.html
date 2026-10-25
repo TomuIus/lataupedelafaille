@@ -155,6 +155,11 @@
     }
     .mission-list { margin: 0 0 12px; padding-left: 22px; font-weight: 400; }
 
+    .role-controls { display: flex; flex-direction: column; gap: 6px; }
+    .role-controls label {
+      display: flex; align-items: center; gap: 6px; font-size: .85rem; font-weight: 700; white-space: nowrap;
+    }
+
     /* Test des alertes */
     .opt { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-weight: 700; }
     .opt input { width: 24px; height: 24px; flex: none; accent-color: #ff5d9e; }
@@ -176,6 +181,7 @@
     #role.boar { background: #ff9f1c; color: #2b2d42; }
     #role.swan { background: #ff8fc7; color: #2b2d42; }
     #role.monkey { background: #d9a066; color: #2b2d42; }
+    #role.bulldog { background: #8d99ae; color: #fff; }
     #role.crew { background: #4cc9f0; color: #2b2d42; }
     #hostButtons {
       display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; padding-top: 18px;
@@ -203,6 +209,7 @@
     .badge.boar { background: #ff9f1c; }
     .badge.swan { background: #ff8fc7; }
     .badge.monkey { background: #d9a066; }
+    .badge.bulldog { background: #8d99ae; color: #fff; }
 
     #resultText { font-size: 1.3rem; font-weight: 700; line-height: 1.4; }
     #voteResult li, #ranking li {
@@ -288,6 +295,7 @@
     <ul id="players"></ul>
     <p id="count"></p>
     <h3>Rôles de la partie</h3>
+    <p class="res-legend" id="lockInfo"></p>
     <ul id="roleList"></ul>
     <h3>Tester les alertes</h3>
     <p class="res-legend">Cliquez sur le bouton, puis retournez sur LoL : l'alerte arrive après quelques secondes.</p>
@@ -546,6 +554,9 @@
         $("count").textContent = `${players.length} / ${room.max_players} joueurs`;
 
         // Catalogue : tout le monde le voit, seul l'hôte peut cocher les rôles optionnels
+        $("lockInfo").textContent =
+          `« Inclus » propose un rôle. Le cadenas le garantit dans la partie (${(room.locked_roles || []).length} / ${MAX_EXTRA_ROLES} verrouillés). ` +
+          `Les autres places, jusqu'à ${MAX_EXTRA_ROLES} rôles, sont tirées au sort parmi les rôles inclus.`;
         $("roleList").innerHTML = "";
         for (const [id, r] of Object.entries(ROLES)) {
           const li = document.createElement("li");
@@ -574,12 +585,31 @@
           }
           li.append(box);
           if (r.optional) {
+            const enabled = (room.roles || []).includes(id);
+            const lockedIds = room.locked_roles || [];
+            const isLocked = lockedIds.includes(id);
+            const controls = document.createElement("div");
+            controls.className = "role-controls";
+
+            const inclLabel = document.createElement("label");
             const cb = document.createElement("input");
             cb.type = "checkbox";
-            cb.checked = (room.roles || []).includes(id);
+            cb.checked = enabled;
             cb.disabled = !isHost;
             cb.addEventListener("change", () => setRoleEnabled(id, cb.checked));
-            li.append(cb);
+            inclLabel.append(cb, " Inclus");
+
+            const lockLabel = document.createElement("label");
+            const lk = document.createElement("input");
+            lk.type = "checkbox";
+            lk.checked = isLocked;
+            // Le cadenas n'est possible que sur un rôle inclus, et pas au-delà de 4 rôles verrouillés
+            lk.disabled = !isHost || !enabled || (!isLocked && lockedIds.length >= MAX_EXTRA_ROLES);
+            lk.addEventListener("change", () => setRoleLocked(id, lk.checked));
+            lockLabel.append(lk, " 🔒 Garanti");
+
+            controls.append(inclLabel, lockLabel);
+            li.append(controls);
           } else {
             const tag = document.createElement("span");
             tag.className = "role-tag"; tag.textContent = "toujours en jeu";
@@ -695,6 +725,13 @@
           }
           text += (room.result === "win") ? "." : " : l'équipe a perdu, il ne gagne pas.";
         }
+        const bulldogPlayer = players.find((p) => p.role === "bulldog");
+        if (bulldogPlayer) {
+          text += ` ${bulldogPlayer.pseudo} était le Bouledogue : ` +
+                  (room.result === "win"
+                    ? `l'équipe a gagné, +${POINTS.bulldogWin} points !`
+                    : `l'équipe a perdu, -${POINTS.bulldogLoss} point.`);
+        }
         $("resultText").textContent = text;
 
         $("voteResult").innerHTML = "";
@@ -785,7 +822,7 @@
         $("ranking").innerHTML = "";
         ranking.forEach((p, i) => {
           const li = document.createElement("li");
-          const gain = gains[p.id] ? ` (+${gains[p.id]})` : "";
+          const gain = gains[p.id] ? ` (${gains[p.id] > 0 ? "+" : ""}${gains[p.id]})` : "";
           li.textContent = `${i + 1}. ${p.pseudo} : ${p.score} pt(s)${gain}`;
           $("ranking").appendChild(li);
         });
@@ -804,7 +841,7 @@
     // Lancer la partie : tirage des rôles, puis changement de statut
     $("start").addEventListener("click", async () => {
       const { data: players } = await db.from("players").select("id").eq("room_code", roomCode);
-      const { data: room } = await db.from("rooms").select("roles").eq("code", roomCode).single();
+      const { data: room } = await db.from("rooms").select("roles, locked_roles").eq("code", roomCode).single();
 
       // On mélange les joueurs : le 1er est la Taupe, les suivants reçoivent les rôles activés par l'hôte
       const shuffled = [...players].sort(() => Math.random() - 0.5);
@@ -812,9 +849,12 @@
       const checked = Object.keys(ROLES).filter(
         (id) => ROLES[id].optional && (room.roles || []).includes(id)
       );
-      const extras = checked
-        .sort(() => Math.random() - 0.5)
-        .slice(0, Math.min(MAX_EXTRA_ROLES, shuffled.length - 1));
+      const slots = Math.min(MAX_EXTRA_ROLES, shuffled.length - 1);
+      const shuffle = (list) => [...list].sort(() => Math.random() - 0.5);
+      // Les rôles verrouillés sont garantis ; les places restantes sont tirées au sort parmi les autres rôles inclus
+      const lockedPicked = shuffle(checked.filter((id) => (room.locked_roles || []).includes(id))).slice(0, slots);
+      const others = shuffle(checked.filter((id) => !lockedPicked.includes(id)));
+      const extras = [...lockedPicked, ...others].slice(0, slots);
       for (let i = 0; i < extras.length; i++) {
         await db.from("players").update({ role: extras[i] }).eq("id", shuffled[i + 1].id);
       }
@@ -937,6 +977,10 @@
       monkey: {
         name: "Le Singe", optional: true,
         desc: "Pendant la partie, vous recevez régulièrement une mission à réaliser, dans le jeu ou à l'oral, annoncée par la voix. Faites gagner l'équipe tout en réussissant plutôt vos missions : à la fin, les autres joueurs confirment si vous y êtes parvenu."
+      },
+      bulldog: {
+        name: "Le Bouledogue", optional: true,
+        desc: "Faites gagner l'équipe à tout prix : si elle gagne, vous marquez un gros bonus (+3 points), mais si elle perd, vous perdez 1 point."
       }
     };
 
@@ -949,7 +993,9 @@
       vaneWin: 2,    // bonus de la Girouette : son camp final correspond au résultat de la partie
       boarWin: 2,    // bonus du Sanglier : partie gagnée et condition confirmée par les autres joueurs
       swanWin: 2,    // bonus du Cygne : partie gagnée et consigne confirmée par les autres joueurs
-      monkeyWin: 2   // bonus du Singe : partie gagnée et missions jugées plutôt réussies
+      monkeyWin: 2,  // bonus du Singe : partie gagnée et missions jugées plutôt réussies
+      bulldogWin: 3, // bonus du Bouledogue : l'équipe gagne
+      bulldogLoss: 1 // malus du Bouledogue : l'équipe perd (le score ne descend jamais sous 0)
     };
 
     // Poids de la Taupe quand on tire l'aimé du Cygne (les autres joueurs ont un poids de 1)
@@ -988,10 +1034,25 @@
 
     // L'hôte active ou désactive un rôle optionnel
     async function setRoleEnabled(id, enabled) {
-      const { data: room } = await db.from("rooms").select("roles").eq("code", roomCode).single();
+      const { data: room } = await db.from("rooms").select("roles, locked_roles").eq("code", roomCode).single();
       const set = new Set(room.roles || []);
-      if (enabled) set.add(id); else set.delete(id);
-      await db.from("rooms").update({ roles: [...set] }).eq("code", roomCode);
+      const locked = new Set(room.locked_roles || []);
+      if (enabled) set.add(id);
+      else { set.delete(id); locked.delete(id); } // un rôle retiré n'est plus verrouillé
+      await db.from("rooms").update({ roles: [...set], locked_roles: [...locked] }).eq("code", roomCode);
+    }
+
+    // L'hôte garantit la présence d'un rôle (4 rôles verrouillés au maximum)
+    async function setRoleLocked(id, lock) {
+      const { data: room } = await db.from("rooms").select("roles, locked_roles").eq("code", roomCode).single();
+      const locked = new Set(room.locked_roles || []);
+      if (lock) {
+        if (locked.size >= MAX_EXTRA_ROLES || !(room.roles || []).includes(id)) return;
+        locked.add(id);
+      } else {
+        locked.delete(id);
+      }
+      await db.from("rooms").update({ locked_roles: [...locked] }).eq("code", roomCode);
     }
 
     // Calcule qui gagne combien de points, sans rien écrire dans la base
@@ -1043,6 +1104,10 @@
         if (holder && verified[roleId] === true && result === "win") add(holder.id, pts);
       }
 
+      // Le Bouledogue : gros bonus si l'équipe gagne, petit malus si elle perd
+      const bulldog = players.find((p) => p.role === "bulldog");
+      if (bulldog) add(bulldog.id, result === "win" ? POINTS.bulldogWin : -POINTS.bulldogLoss);
+
       // La Girouette gagne selon son camp final : équipe si la partie est gagnée, Taupe si elle est perdue
       let vaneWon = false;
       if (vane) {
@@ -1073,7 +1138,7 @@
       await Promise.all(
         players
           .filter((p) => gains[p.id])
-          .map((p) => db.from("players").update({ score: p.score + gains[p.id] }).eq("id", p.id))
+          .map((p) => db.from("players").update({ score: Math.max(0, p.score + gains[p.id]) }).eq("id", p.id))
       );
     }
 
