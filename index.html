@@ -144,10 +144,10 @@
     #vaneSide.team { background: #4cc9f0; color: #2b2d42; }
     #vaneSide.mole { background: #ff5d73; color: #fff; }
 
-    #checkText { margin-top: 0; font-weight: 700; }
-    #checkButtons { display: flex; gap: 12px; margin-bottom: 8px; }
-    #checkButtons .yes { background: #06d6a0; color: #2b2d42; }
-    #checkButtons .no { background: #ff5d73; color: #fff; }
+    .check-text { margin: 0 0 8px; font-weight: 700; }
+    .check-buttons { display: flex; gap: 12px; margin-bottom: 10px; }
+    .check-buttons .yes { background: #06d6a0; color: #2b2d42; }
+    .check-buttons .no { background: #ff5d73; color: #fff; }
 
     /* Test des alertes */
     .opt { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-weight: 700; }
@@ -168,6 +168,7 @@
     #role.badger { background: #ffd166; color: #2b2d42; }
     #role.vane { background: #b185db; color: #fff; }
     #role.boar { background: #ff9f1c; color: #2b2d42; }
+    #role.swan { background: #ff8fc7; color: #2b2d42; }
     #role.crew { background: #4cc9f0; color: #2b2d42; }
     #hostButtons {
       display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; padding-top: 18px;
@@ -193,6 +194,7 @@
     .badge.crew { background: #4cc9f0; }
     .badge.vane { background: #b185db; color: #fff; }
     .badge.boar { background: #ff9f1c; }
+    .badge.swan { background: #ff8fc7; }
 
     #resultText { font-size: 1.3rem; font-weight: 700; line-height: 1.4; }
     #voteResult li, #ranking li {
@@ -332,8 +334,7 @@
     <ul id="voteResult"></ul>
     <div id="checkBox" hidden>
       <h3>Vérification</h3>
-      <p id="checkText"></p>
-      <div id="checkButtons"></div>
+      <div id="checkList"></div>
       <button id="skipCheck" hidden>Passer la vérification</button>
     </div>
     <h3>Classement du salon</h3>
@@ -351,7 +352,8 @@
 
     let roomCode = null;
     let myId = null;
-    let myRole = null; // crew, mole ou badger
+    let myRole = null; // crew, mole, badger, vane, boar ou swan
+    let myLovedName = null; // pour le Cygne : le pseudo de son aimé
     let channel = null; // le canal temps réel du salon courant
 
     const $ = (id) => document.getElementById(id);
@@ -484,7 +486,7 @@
       if (!room) return leaveLocally("Le salon a été fermé.");
       const { data: players } = await db
         .from("players")
-        .select("id, pseudo, role, score")
+        .select("id, pseudo, role, score, loved_id")
         .eq("room_code", roomCode);
       const { data: votes } = await db
         .from("votes")
@@ -584,6 +586,8 @@
       if (room.status === "playing") {
         const me = players.find((p) => p.id === myId);
         myRole = me ? me.role : null;
+        const loved = me ? players.find((p) => p.id === me.loved_id) : null;
+        myLovedName = loved ? loved.pseudo : null;
         $("hostButtons").hidden = !isHost;
         const vaneOn = (room.roles || []).includes("vane");
         $("startGame").hidden = !(isHost && vaneOn && !room.game_started_at);
@@ -625,22 +629,29 @@
       }
 
       if (room.status === "finished") {
-        const verdict = boarVerdict(players, checks, room.checks_closed);
+        // Vérifications (seulement si l'équipe a gagné)
+        const verdicts = room.result === "win" ? allVerdicts(players, checks, room.checks_closed) : [];
+        const allDone = verdicts.length > 0 && verdicts.every((v) => v.done);
 
-        // Quand tous ont répondu, l'hôte (une seule fois) accorde le bonus du Sanglier s'il est confirmé
-        if (isHost && verdict && room.result === "win" && verdict.done && !room.bonus_scored) {
+        // Quand tout est terminé, l'hôte (une seule fois) accorde les bonus confirmés
+        if (isHost && allDone && !room.bonus_scored) {
           const { data: locked } = await db
             .from("rooms")
             .update({ bonus_scored: true })
             .eq("code", roomCode)
             .eq("bonus_scored", false)
             .select();
-          if (locked && locked.length && verdict.success) await awardBonus(verdict.boar.id, POINTS.boarWin);
+          if (locked && locked.length) {
+            for (const v of verdicts) {
+              if (v.success) await awardBonus(v.holder.id, POINTS[v.roleId + "Win"]);
+            }
+          }
         }
 
-        const boarOk = (verdict && room.result === "win" && verdict.done) ? verdict.success : null;
+        const verified = {};
+        if (allDone) for (const v of verdicts) verified[v.roleId] = v.success;
         const { mole, badger, vane, counts, caught, badgerWon, vaneWon, vaneSide, gains } =
-          computePoints(room.result, players, votes, vaneFinalSide(room), boarOk);
+          computePoints(room.result, players, votes, vaneFinalSide(room), verified);
         const moleName = mole ? mole.pseudo : "?";
 
         let text = room.result === "win"
@@ -661,9 +672,15 @@
           text += ` ${vane.pseudo} était la Girouette, finie du côté de ${sideLabel(vaneSide)} : ` +
                   (vaneWon ? "elle gagne !" : "elle perd.");
         }
-        if (verdict) {
-          text += ` ${verdict.boar.pseudo} était le Sanglier` +
-                  (room.result === "win" ? "." : " : l'équipe a perdu, il ne gagne pas.");
+        for (const id of VERIFIED_ROLES) {
+          const holder = players.find((p) => p.role === id);
+          if (!holder) continue;
+          text += ` ${holder.pseudo} était ${ROLES[id].name.replace(/^L/, "l")}`;
+          if (id === "swan") {
+            const loved = players.find((p) => p.id === holder.loved_id);
+            if (loved) text += ` (aimé : ${loved.pseudo})`;
+          }
+          text += (room.result === "win") ? "." : " : l'équipe a perdu, il ne gagne pas.";
         }
         $("resultText").textContent = text;
 
@@ -697,33 +714,42 @@
           $("voteResult").appendChild(li);
         }
 
-        // Vérification du Sanglier : seulement si l'équipe a gagné
-        $("checkBox").hidden = !(verdict && room.result === "win");
-        if (!$("checkBox").hidden) {
-          $("checkButtons").innerHTML = "";
-          $("skipCheck").hidden = !(isHost && !verdict.done);
-          const iAmBoar = (verdict.boar.id === myId);
-          const answered = checks.some((c) => c.kind === "boar" && c.voter_id === myId);
-          if (verdict.done) {
-            $("checkText").textContent = verdict.answered === 0
-              ? `Aucune réponse : pas de bonus pour ${verdict.boar.pseudo}.`
-              : `${verdict.boar.pseudo} ${verdict.success ? "a" : "n'a pas"} rempli sa condition ` +
-                `(${verdict.yes} oui, ${verdict.no} non)` +
-                (verdict.success ? ` : +${POINTS.boarWin} points.` : ".") +
-                (verdict.answered < verdict.voters ? " Vérification clôturée par l'hôte : les absents sont ignorés." : "");
-          } else if (iAmBoar || answered) {
-            $("checkText").textContent =
-              `Vérification en cours : ${verdict.answered} / ${verdict.voters} réponses.`;
-          } else {
-            $("checkText").textContent =
-              `${verdict.boar.pseudo} avait-il à la fois le plus de morts et le plus de dégâts parmi les 10 joueurs ?`;
-            for (const [label, value, cls] of [["Oui", true, "yes"], ["Non", false, "no"]]) {
-              const b = document.createElement("button");
-              b.className = cls;
-              b.textContent = label;
-              b.addEventListener("click", () => answerCheck(value));
-              $("checkButtons").appendChild(b);
+        // Encart de vérification : une question par rôle concerné
+        $("checkBox").hidden = (verdicts.length === 0);
+        if (verdicts.length) {
+          $("checkList").innerHTML = "";
+          $("skipCheck").hidden = !(isHost && !allDone);
+          for (const v of verdicts) {
+            const item = document.createElement("div");
+            const line = document.createElement("p");
+            line.className = "check-text";
+            const name = `${v.holder.pseudo} (${ROLES[v.roleId].name})`;
+            const answered = checks.some((c) => c.kind === v.roleId && c.voter_id === myId);
+
+            if (v.done) {
+              line.textContent = v.answered === 0
+                ? `${name} : aucune réponse, pas de bonus.`
+                : `${name} ${v.success ? "a" : "n'a pas"} rempli sa condition (${v.yes} oui, ${v.no} non)` +
+                  (v.success ? ` : +${POINTS[v.roleId + "Win"]} points.` : ".") +
+                  (v.answered < v.voters ? " Vérification clôturée par l'hôte : les absents sont ignorés." : "");
+              item.append(line);
+            } else if (v.holder.id === myId || answered) {
+              line.textContent = `${name} : vérification en cours, ${v.answered} / ${v.voters} réponses.`;
+              item.append(line);
+            } else {
+              line.textContent = checkQuestion(v, players);
+              const buttons = document.createElement("div");
+              buttons.className = "check-buttons";
+              for (const [label, value, cls] of [["Oui", true, "yes"], ["Non", false, "no"]]) {
+                const b = document.createElement("button");
+                b.className = cls;
+                b.textContent = label;
+                b.addEventListener("click", () => answerCheck(v.roleId, value));
+                buttons.appendChild(b);
+              }
+              item.append(line, buttons);
             }
+            $("checkList").appendChild(item);
           }
         }
 
@@ -741,7 +767,7 @@
 
         $("again").hidden = !isHost;
         // Pas de nouvelle partie tant que la vérification n'est pas terminée et le bonus accordé
-        const pending = !!verdict && room.result === "win" && !(verdict.done && room.bonus_scored);
+        const pending = verdicts.length > 0 && !(allDone && room.bonus_scored);
         $("again").disabled = pending;
         $("again").textContent = pending ? "Nouvelle partie (vérification en cours…)" : "Nouvelle partie";
         show("finished");
@@ -764,6 +790,21 @@
       for (let i = 0; i < extras.length && i + 1 < shuffled.length; i++) {
         await db.from("players").update({ role: extras[i] }).eq("id", shuffled[i + 1].id);
       }
+
+      // Le Cygne : on tire son aimé parmi les autres joueurs, la Taupe ayant moins de chances
+      const swanIndex = extras.indexOf("swan");
+      if (swanIndex !== -1 && swanIndex + 1 < shuffled.length) {
+        const swan = shuffled[swanIndex + 1];
+        const candidates = shuffled.filter((p) => p.id !== swan.id);
+        const weights = candidates.map((p) => (p.id === shuffled[0].id ? LOVER_MOLE_WEIGHT : 1));
+        let draw = Math.random() * weights.reduce((a, b) => a + b, 0);
+        let loved = candidates[candidates.length - 1];
+        for (let i = 0; i < candidates.length; i++) {
+          draw -= weights[i];
+          if (draw <= 0) { loved = candidates[i]; break; }
+        }
+        await db.from("players").update({ loved_id: loved.id }).eq("id", swan.id);
+      }
       await db.from("rooms").update({ status: "playing" }).eq("code", roomCode);
     });
 
@@ -778,6 +819,9 @@
         const r = ROLES[myRole] || ROLES.crew;
         roleEl.textContent = `Vous êtes ${r.name.toUpperCase()} : ${r.desc}`;
         roleEl.className = ROLES[myRole] ? myRole : "crew";
+        if (myRole === "swan" && myLovedName) {
+          roleEl.textContent += ` Votre aimé : ${myLovedName.toUpperCase()}.`;
+        }
         roleEl.hidden = false;
         $("toggleRole").textContent = "Cacher mon rôle";
         if (myRole === "vane") {
@@ -816,12 +860,12 @@
       const { data: ps } = await db.from("players").select("id, role").eq("room_code", roomCode);
       const { data: cs } = await db.from("checks").select("voter_id, kind, answer").eq("room_code", roomCode);
       const { data: rm } = await db.from("rooms").select("result, bonus_scored, checks_closed").eq("code", roomCode).single();
-      const v = (ps && cs && rm) ? boarVerdict(ps, cs, rm.checks_closed) : null;
-      if (v && rm && rm.result === "win" && !(v.done && rm.bonus_scored)) return;
+      const vs = (ps && cs && rm && rm.result === "win") ? allVerdicts(ps, cs, rm.checks_closed) : [];
+      if (vs.length && !(vs.every((v) => v.done) && rm.bonus_scored)) return;
 
       await db.from("votes").delete().eq("room_code", roomCode);
       await db.from("checks").delete().eq("room_code", roomCode);
-      await db.from("players").update({ role: "crew" }).eq("room_code", roomCode);
+      await db.from("players").update({ role: "crew", loved_id: null }).eq("room_code", roomCode);
       await db
         .from("rooms")
         .update({ status: "lobby", result: null, game_started_at: null, game_ended_at: null, vane_sides: [], bonus_scored: false, checks_closed: false })
@@ -851,6 +895,10 @@
       boar: {
         name: "Le Sanglier", optional: true,
         desc: "Faites gagner l'équipe en ayant à la fois le plus de morts et le plus de dégâts infligés parmi les 10 joueurs de la partie. À la fin, les autres joueurs confirment si vous avez rempli la condition."
+      },
+      swan: {
+        name: "Le Cygne", optional: true,
+        desc: "Un joueur tiré au sort, que vous seul connaissez, est votre aimé. S'il meurt dans LoL, vous devez le suivre dans la mort assez rapidement, tout en faisant gagner l'équipe. À la fin, les autres joueurs confirment si vous avez respecté votre consigne."
       }
     };
 
@@ -861,8 +909,12 @@
       moleWin: 2,    // partie perdue, Taupe non démasquée (égalité comprise)
       badgerWin: 2,  // bonus du Blaireau : partie gagnée et plus de voix que la Taupe
       vaneWin: 2,    // bonus de la Girouette : son camp final correspond au résultat de la partie
-      boarWin: 2     // bonus du Sanglier : partie gagnée et condition confirmée par les autres joueurs
+      boarWin: 2,    // bonus du Sanglier : partie gagnée et condition confirmée par les autres joueurs
+      swanWin: 2     // bonus du Cygne : partie gagnée et consigne confirmée par les autres joueurs
     };
+
+    // Poids de la Taupe quand on tire l'aimé du Cygne (les autres joueurs ont un poids de 1)
+    const LOVER_MOLE_WEIGHT = 0.5;
 
     // L'hôte active ou désactive un rôle optionnel
     async function setRoleEnabled(id, enabled) {
@@ -873,7 +925,7 @@
     }
 
     // Calcule qui gagne combien de points, sans rien écrire dans la base
-    function computePoints(result, players, votes, vaneSide = "team", boarOk = null) {
+    function computePoints(result, players, votes, vaneSide = "team", verified = {}) {
       const mole = players.find((p) => p.role === "mole");
       const badger = players.find((p) => p.role === "badger");
       const vane = players.find((p) => p.role === "vane");
@@ -915,9 +967,11 @@
         rewardVoters();
         if (!caught) add(mole.id, POINTS.moleWin);
       }
-      // Le Sanglier : bonus seulement si l'équipe gagne ET que les autres ont confirmé sa condition
-      const boar = players.find((p) => p.role === "boar");
-      if (boar && boarOk === true && result === "win") add(boar.id, POINTS.boarWin);
+      // Sanglier et Cygne : bonus seulement si l'équipe gagne ET que les autres ont confirmé
+      for (const [roleId, pts] of [["boar", POINTS.boarWin], ["swan", POINTS.swanWin]]) {
+        const holder = players.find((p) => p.role === roleId);
+        if (holder && verified[roleId] === true && result === "win") add(holder.id, pts);
+      }
 
       // La Girouette gagne selon son camp final : équipe si la partie est gagnée, Taupe si elle est perdue
       let vaneWon = false;
@@ -955,17 +1009,21 @@
 
     // ---------- Vérification par les joueurs (Sanglier) ----------
 
-    // Résume les réponses « oui / non » des joueurs sur la condition du Sanglier
-    function boarVerdict(players, checks, closed = false) {
-      const boar = players.find((p) => p.role === "boar");
-      if (!boar) return null;
-      const voters = players.filter((p) => p.id !== boar.id);
+    // Rôles dont la condition est confirmée par un vote des autres joueurs
+    const VERIFIED_ROLES = ["boar", "swan"];
+
+    // Résume les réponses « oui / non » des joueurs sur la condition d'un rôle
+    function roleVerdict(roleId, players, checks, closed) {
+      const holder = players.find((p) => p.role === roleId);
+      if (!holder) return null;
+      const voters = players.filter((p) => p.id !== holder.id);
       const answers = checks.filter(
-        (c) => c.kind === "boar" && voters.some((v) => v.id === c.voter_id)
+        (c) => c.kind === roleId && voters.some((v) => v.id === c.voter_id)
       );
       const yes = answers.filter((c) => c.answer).length;
       return {
-        boar,
+        roleId,
+        holder,
         voters: voters.length,
         answered: answers.length,
         yes,
@@ -977,13 +1035,27 @@
       };
     }
 
-    async function answerCheck(value) {
+    function allVerdicts(players, checks, closed) {
+      return VERIFIED_ROLES.map((id) => roleVerdict(id, players, checks, closed)).filter(Boolean);
+    }
+
+    // La question posée aux autres joueurs pour chaque rôle vérifié
+    function checkQuestion(v, players) {
+      if (v.roleId === "swan") {
+        const loved = players.find((p) => p.id === v.holder.loved_id);
+        return `${v.holder.pseudo} (le Cygne) était amoureux de ${loved ? loved.pseudo : "?"}. ` +
+               `Il devait le suivre dans la mort si celui-ci mourait : a-t-il respecté sa consigne ?`;
+      }
+      return `${v.holder.pseudo} (le Sanglier) avait-il à la fois le plus de morts et le plus de dégâts parmi les 10 joueurs ?`;
+    }
+
+    async function answerCheck(kind, value) {
       // Une réponse arrivée après la clôture serait ignorée : on la refuse
       const { data: rm } = await db.from("rooms").select("checks_closed").eq("code", roomCode).single();
       if (rm && rm.checks_closed) return;
       const { error } = await db
         .from("checks")
-        .insert({ room_code: roomCode, voter_id: myId, kind: "boar", answer: value });
+        .insert({ room_code: roomCode, voter_id: myId, kind, answer: value });
       if (error) console.error(error);
     }
 
