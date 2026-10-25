@@ -149,6 +149,12 @@
     .check-buttons .yes { background: #06d6a0; color: #2b2d42; }
     .check-buttons .no { background: #ff5d73; color: #fff; }
 
+    #monkeySide {
+      margin: 0 0 16px; padding: 14px; text-align: center; font-weight: 700;
+      border: 3px solid var(--line); border-radius: 14px; background: #d9a066; color: #2b2d42;
+    }
+    .mission-list { margin: 0 0 12px; padding-left: 22px; font-weight: 400; }
+
     /* Test des alertes */
     .opt { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-weight: 700; }
     .opt input { width: 24px; height: 24px; flex: none; accent-color: #ff5d9e; }
@@ -169,6 +175,7 @@
     #role.vane { background: #b185db; color: #fff; }
     #role.boar { background: #ff9f1c; color: #2b2d42; }
     #role.swan { background: #ff8fc7; color: #2b2d42; }
+    #role.monkey { background: #d9a066; color: #2b2d42; }
     #role.crew { background: #4cc9f0; color: #2b2d42; }
     #hostButtons {
       display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; padding-top: 18px;
@@ -195,6 +202,7 @@
     .badge.vane { background: #b185db; color: #fff; }
     .badge.boar { background: #ff9f1c; }
     .badge.swan { background: #ff8fc7; }
+    .badge.monkey { background: #d9a066; }
 
     #resultText { font-size: 1.3rem; font-weight: 700; line-height: 1.4; }
     #voteResult li, #ranking li {
@@ -303,6 +311,7 @@
     <button id="toggleRole">Voir mon rôle</button>
     <p id="role" hidden></p>
     <div id="vaneSide" hidden></div>
+    <div id="monkeySide" hidden></div>
     <label class="opt">Alertes :
       <select id="soundModeGame">
         <option value="voice">Voix</option>
@@ -311,7 +320,7 @@
     </label>
     <div id="hostButtons" hidden>
       <button id="startGame" hidden>La partie de LoL a commencé</button>
-      <p id="vaneStarted" hidden>⏱️ Compte à rebours de la Girouette lancé.</p>
+      <p id="vaneStarted" hidden>⏱️ Compte à rebours des rôles lancé.</p>
       <p>Résultat de la partie de League of Legends :</p>
       <button id="win">Victoire</button>
       <button id="loss">Défaite</button>
@@ -505,13 +514,14 @@
 
       players.sort((a, b) => a.pseudo.localeCompare(b.pseudo));
       const isHost = (myId === room.host_id);
-      if (room.status !== "playing") stopVane();
+      if (room.status !== "playing") { stopVane(); stopMonkey(); }
 
       if (room.status === "lobby") {
         // Nouvelle partie : on oublie le rôle précédent et on le recache
         myRole = null;
         $("role").hidden = true;
         $("vaneSide").hidden = true;
+        $("monkeySide").hidden = true;
         $("toggleRole").textContent = "Voir mon rôle";
 
         show("lobby");
@@ -545,19 +555,20 @@
           const desc = document.createElement("div");
           desc.className = "role-desc"; desc.textContent = r.desc;
           box.append(name, desc);
-          if (id === "vane" && (room.roles || []).includes("vane")) {
+          const intervalColumn = INTERVAL_COLUMNS[id];
+          if (intervalColumn && (room.roles || []).includes(id)) {
             const opt = document.createElement("div");
             opt.className = "role-desc";
-            opt.append("Tirage toutes les ");
+            opt.append(id === "monkey" ? "Une mission toutes les " : "Tirage toutes les ");
             const sel = document.createElement("select");
             for (const m of [3, 5, 8, 10]) {
               const o = document.createElement("option");
               o.value = m; o.textContent = m;
               sel.appendChild(o);
             }
-            sel.value = room.vane_interval;
+            sel.value = room[intervalColumn];
             sel.disabled = !isHost;
-            sel.addEventListener("change", () => setVaneInterval(Number(sel.value)));
+            sel.addEventListener("change", () => setRoleInterval(intervalColumn, Number(sel.value)));
             opt.append(sel, " minutes");
             box.append(opt);
           }
@@ -589,10 +600,12 @@
         const loved = me ? players.find((p) => p.id === me.loved_id) : null;
         myLovedName = loved ? loved.pseudo : null;
         $("hostButtons").hidden = !isHost;
-        const vaneOn = (room.roles || []).includes("vane");
-        $("startGame").hidden = !(isHost && vaneOn && !room.game_started_at);
-        $("vaneStarted").hidden = !(isHost && vaneOn && room.game_started_at);
+        // Le bouton s'affiche si un rôle à minuteur est coché (sans révéler lequel est réellement en jeu)
+        const timerOn = (room.roles || []).some((r) => r === "vane" || r === "monkey");
+        $("startGame").hidden = !(isHost && timerOn && !room.game_started_at);
+        $("vaneStarted").hidden = !(isHost && timerOn && room.game_started_at);
         updateVane(room);
+        updateMonkey(room);
         show("game");
         return;
       }
@@ -738,6 +751,17 @@
               item.append(line);
             } else {
               line.textContent = checkQuestion(v, players);
+              // Pour le Singe, on rappelle les missions reçues, car on les oublie vite
+              let missionList = null;
+              if (v.roleId === "monkey") {
+                missionList = document.createElement("ul");
+                missionList.className = "mission-list";
+                for (const m of monkeyMissionsReceived(room)) {
+                  const li = document.createElement("li");
+                  li.textContent = m;
+                  missionList.appendChild(li);
+                }
+              }
               const buttons = document.createElement("div");
               buttons.className = "check-buttons";
               for (const [label, value, cls] of [["Oui", true, "yes"], ["Non", false, "no"]]) {
@@ -747,7 +771,8 @@
                 b.addEventListener("click", () => answerCheck(v.roleId, value));
                 buttons.appendChild(b);
               }
-              item.append(line, buttons);
+              if (missionList) item.append(line, missionList, buttons);
+              else item.append(line, buttons);
             }
             $("checkList").appendChild(item);
           }
@@ -784,10 +809,13 @@
       // On mélange les joueurs : le 1er est la Taupe, les suivants reçoivent les rôles activés par l'hôte
       const shuffled = [...players].sort(() => Math.random() - 0.5);
       await db.from("players").update({ role: "mole" }).eq("id", shuffled[0].id);
-      const extras = Object.keys(ROLES).filter(
+      const checked = Object.keys(ROLES).filter(
         (id) => ROLES[id].optional && (room.roles || []).includes(id)
       );
-      for (let i = 0; i < extras.length && i + 1 < shuffled.length; i++) {
+      const extras = checked
+        .sort(() => Math.random() - 0.5)
+        .slice(0, Math.min(MAX_EXTRA_ROLES, shuffled.length - 1));
+      for (let i = 0; i < extras.length; i++) {
         await db.from("players").update({ role: extras[i] }).eq("id", shuffled[i + 1].id);
       }
 
@@ -814,6 +842,7 @@
       if (!roleEl.hidden) {
         roleEl.hidden = true;
         $("vaneSide").hidden = true;
+        $("monkeySide").hidden = true;
         $("toggleRole").textContent = "Voir mon rôle";
       } else {
         const r = ROLES[myRole] || ROLES.crew;
@@ -828,6 +857,11 @@
           $("vaneSide").hidden = false;
           renderVane();
           // C'est un clic : on demande l'autorisation des notifications
+          askNotificationPermission();
+        }
+        if (myRole === "monkey") {
+          $("monkeySide").hidden = false;
+          renderMonkey();
           askNotificationPermission();
         }
       }
@@ -868,7 +902,7 @@
       await db.from("players").update({ role: "crew", loved_id: null }).eq("room_code", roomCode);
       await db
         .from("rooms")
-        .update({ status: "lobby", result: null, game_started_at: null, game_ended_at: null, vane_sides: [], bonus_scored: false, checks_closed: false })
+        .update({ status: "lobby", result: null, game_started_at: null, game_ended_at: null, vane_sides: [], monkey_missions: [], bonus_scored: false, checks_closed: false })
         .eq("code", roomCode);
     });
 
@@ -899,6 +933,10 @@
       swan: {
         name: "Le Cygne", optional: true,
         desc: "Un joueur tiré au sort, que vous seul connaissez, est votre aimé. S'il meurt dans LoL, vous devez le suivre dans la mort assez rapidement, tout en faisant gagner l'équipe. À la fin, les autres joueurs confirment si vous avez respecté votre consigne."
+      },
+      monkey: {
+        name: "Le Singe", optional: true,
+        desc: "Pendant la partie, vous recevez régulièrement une mission à réaliser, dans le jeu ou à l'oral, annoncée par la voix. Faites gagner l'équipe tout en réussissant plutôt vos missions : à la fin, les autres joueurs confirment si vous y êtes parvenu."
       }
     };
 
@@ -910,11 +948,43 @@
       badgerWin: 2,  // bonus du Blaireau : partie gagnée et plus de voix que la Taupe
       vaneWin: 2,    // bonus de la Girouette : son camp final correspond au résultat de la partie
       boarWin: 2,    // bonus du Sanglier : partie gagnée et condition confirmée par les autres joueurs
-      swanWin: 2     // bonus du Cygne : partie gagnée et consigne confirmée par les autres joueurs
+      swanWin: 2,    // bonus du Cygne : partie gagnée et consigne confirmée par les autres joueurs
+      monkeyWin: 2   // bonus du Singe : partie gagnée et missions jugées plutôt réussies
     };
 
     // Poids de la Taupe quand on tire l'aimé du Cygne (les autres joueurs ont un poids de 1)
     const LOVER_MOLE_WEIGHT = 0.5;
+
+    // Nombre maximum de rôles optionnels par partie (si l'hôte en coche plus, on en tire au sort)
+    const MAX_EXTRA_ROLES = 4;
+
+    // Rôles qui ont une fréquence réglable par l'hôte (colonne de la table rooms)
+    const INTERVAL_COLUMNS = { vane: "vane_interval", monkey: "monkey_interval" };
+
+    // Les missions du Singe : quelques-unes à l'oral, la plupart en jeu. Modifiables librement.
+    const MISSIONS = [
+      // À l'oral
+      "Féliciter à voix haute un coéquipier pour une action, réelle ou imaginaire",
+      "Faire un rire de méchant de dessin animé",
+      "Annoncer « Je sens que ça va mal tourner » juste avant un combat",
+      "Remettre la faute d'une action sur un autre joueur",
+      "Revendiquer le mérite d'une action réussie par quelqu'un d'autre",
+      // En jeu
+      "Acheter 2 pink wards",
+      "Poser une balise dans un buisson où vous n'en posez jamais",
+      "Danser à côté d'un coéquipier ou d'un monstre neutre",
+      "Suivre un coéquipier comme son ombre pendant une trentaine de secondes",
+      "Aller visiter un endroit de la carte où vous n'allez jamais",
+      "Aller tuer le crabe de la rivière",
+      "Tenter d'aller prendre un des 2 buffs ennemis",
+      "Rendre visite à un coéquipier dans une autre voie",
+      "Faire un retour à la base à un endroit inhabituel, comme au milieu de la rivière",
+      "Aller attendre devant la fosse du Dragon pendant un moment",
+      "Saluer un coéquipier avec une émote",
+      "Utiliser un ping pour proposer un objectif à l'équipe, comme le Dragon ou une tourelle",
+      "Poser une balise dans la jungle ennemie",
+      "Se cacher dans un buisson pendant une dizaine de secondes, en embuscade"
+    ];
 
     // L'hôte active ou désactive un rôle optionnel
     async function setRoleEnabled(id, enabled) {
@@ -968,7 +1038,7 @@
         if (!caught) add(mole.id, POINTS.moleWin);
       }
       // Sanglier et Cygne : bonus seulement si l'équipe gagne ET que les autres ont confirmé
-      for (const [roleId, pts] of [["boar", POINTS.boarWin], ["swan", POINTS.swanWin]]) {
+      for (const [roleId, pts] of [["boar", POINTS.boarWin], ["swan", POINTS.swanWin], ["monkey", POINTS.monkeyWin]]) {
         const holder = players.find((p) => p.role === roleId);
         if (holder && verified[roleId] === true && result === "win") add(holder.id, pts);
       }
@@ -1010,7 +1080,7 @@
     // ---------- Vérification par les joueurs (Sanglier) ----------
 
     // Rôles dont la condition est confirmée par un vote des autres joueurs
-    const VERIFIED_ROLES = ["boar", "swan"];
+    const VERIFIED_ROLES = ["boar", "swan", "monkey"];
 
     // Résume les réponses « oui / non » des joueurs sur la condition d'un rôle
     function roleVerdict(roleId, players, checks, closed) {
@@ -1045,6 +1115,10 @@
         const loved = players.find((p) => p.id === v.holder.loved_id);
         return `${v.holder.pseudo} (le Cygne) était amoureux de ${loved ? loved.pseudo : "?"}. ` +
                `Il devait le suivre dans la mort si celui-ci mourait : a-t-il respecté sa consigne ?`;
+      }
+      if (v.roleId === "monkey") {
+        return `${v.holder.pseudo} (le Singe) devait relever des défis pendant la partie (liste ci-dessous). ` +
+               `A-t-il plutôt réussi ses missions dans l'ensemble ?`;
       }
       return `${v.holder.pseudo} (le Sanglier) avait-il à la fois le plus de morts et le plus de dégâts parmi les 10 joueurs ?`;
     }
@@ -1245,9 +1319,9 @@
     const sideLabel = (side) => (side === "team" ? "l'équipe" : "la Taupe");
     const currentPermission = () => ("Notification" in window ? Notification.permission : "unsupported");
 
-    // L'hôte choisit la fréquence des tirages
-    async function setVaneInterval(minutes) {
-      await db.from("rooms").update({ vane_interval: minutes }).eq("code", roomCode);
+    // L'hôte choisit la fréquence des tirages (Girouette) ou des missions (Singe)
+    async function setRoleInterval(column, minutes) {
+      await db.from("rooms").update({ [column]: minutes }).eq("code", roomCode);
     }
 
     // Planning tiré à l'avance : à chaque tirage, une chance sur deux de changer de camp
@@ -1330,13 +1404,100 @@
 
     // L'hôte lance le compte à rebours quand la partie de LoL commence réellement
     $("startGame").addEventListener("click", async () => {
-      const { data: room } = await db.from("rooms").select("vane_interval").eq("code", roomCode).single();
+      const { data: room } = await db.from("rooms").select("vane_interval, monkey_interval").eq("code", roomCode).single();
       await db
         .from("rooms")
-        .update({ game_started_at: new Date().toISOString(), vane_sides: makeVaneSchedule(room.vane_interval) })
+        .update({
+          game_started_at: new Date().toISOString(),
+          vane_sides: makeVaneSchedule(room.vane_interval),
+          monkey_missions: makeMonkeySchedule(room.monkey_interval)
+        })
         .eq("code", roomCode)
         .is("game_started_at", null);
     });
+
+    // ---------- Le Singe ----------
+
+    // Planning tiré à l'avance : une mission dès le début, puis une par échéance, sans répétition
+    // tant que toutes les missions n'ont pas été données
+    function makeMonkeySchedule(intervalMinutes) {
+      const count = Math.ceil(90 / intervalMinutes) + 1;
+      const order = [];
+      while (order.length < count) {
+        order.push(...MISSIONS.map((_, i) => i).sort(() => Math.random() - 0.5));
+      }
+      return order.slice(0, count);
+    }
+
+    function monkeyTickAt(room, time) {
+      const started = new Date(room.game_started_at).getTime();
+      return Math.max(0, Math.floor((time - started) / (room.monkey_interval * 60000)));
+    }
+
+    function monkeyMissionAtTick(room, tick) {
+      const list = room.monkey_missions || [];
+      if (list.length === 0) return null;
+      return MISSIONS[list[Math.min(tick, list.length - 1)]];
+    }
+
+    // Toutes les missions reçues jusqu'à la fin de la partie (pour aider les joueurs à juger)
+    function monkeyMissionsReceived(room) {
+      if (!room.game_started_at || !room.game_ended_at) return [];
+      const last = monkeyTickAt(room, new Date(room.game_ended_at).getTime());
+      const out = [];
+      for (let t = 0; t <= last; t++) {
+        const m = monkeyMissionAtTick(room, t);
+        if (m) out.push(m);
+      }
+      return out;
+    }
+
+    let monkeyRoom = null;
+    let monkeyTimer = null;
+    let monkeyLastTick = -1;
+
+    // Affiche la mission en cours (visible seulement quand le Singe a révélé son rôle)
+    function renderMonkey() {
+      if (!monkeyRoom) return;
+      const el = $("monkeySide");
+      if (!monkeyRoom.game_started_at) {
+        el.textContent = "Mission : en attente du début de la partie.";
+        return;
+      }
+      const m = monkeyMissionAtTick(monkeyRoom, monkeyTickAt(monkeyRoom, Date.now()));
+      el.textContent = m ? `Mission en cours : ${m}` : "Aucune mission pour l'instant.";
+    }
+
+    function stopMonkey() {
+      if (monkeyTimer) { clearInterval(monkeyTimer); monkeyTimer = null; }
+      monkeyRoom = null;
+    }
+
+    function updateMonkey(room) {
+      if (myRole !== "monkey" || !room.game_started_at) { stopMonkey(); return; }
+      const first = !monkeyTimer;
+      monkeyRoom = room;
+      if (first) {
+        // Au tout début de la partie on annonce la 1re mission ; après un simple rechargement, aucune annonce
+        const justStarted = (Date.now() - new Date(room.game_started_at).getTime()) < 15000;
+        monkeyLastTick = justStarted ? -1 : monkeyTickAt(room, Date.now());
+        monkeyTimer = setInterval(monkeyLoop, 1000);
+        monkeyLoop();
+      }
+      renderMonkey();
+    }
+
+    // Chaque seconde : une nouvelle mission est-elle arrivée ? Si oui, on l'annonce
+    function monkeyLoop() {
+      if (!monkeyRoom) return;
+      const tick = monkeyTickAt(monkeyRoom, Date.now());
+      if (tick > monkeyLastTick) {
+        const m = monkeyMissionAtTick(monkeyRoom, tick);
+        if (m) fireAlert(`Mission : ${m}.`, currentPermission());
+        monkeyLastTick = tick;
+      }
+      renderMonkey();
+    }
 
     // ---------- Thème clair / sombre ----------
 
