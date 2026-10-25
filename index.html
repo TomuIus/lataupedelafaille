@@ -334,6 +334,7 @@
       <h3>Vérification</h3>
       <p id="checkText"></p>
       <div id="checkButtons"></div>
+      <button id="skipCheck" hidden>Passer la vérification</button>
     </div>
     <h3>Classement du salon</h3>
     <ul id="ranking"></ul>
@@ -624,7 +625,7 @@
       }
 
       if (room.status === "finished") {
-        const verdict = boarVerdict(players, checks);
+        const verdict = boarVerdict(players, checks, room.checks_closed);
 
         // Quand tous ont répondu, l'hôte (une seule fois) accorde le bonus du Sanglier s'il est confirmé
         if (isHost && verdict && room.result === "win" && verdict.done && !room.bonus_scored) {
@@ -700,13 +701,16 @@
         $("checkBox").hidden = !(verdict && room.result === "win");
         if (!$("checkBox").hidden) {
           $("checkButtons").innerHTML = "";
+          $("skipCheck").hidden = !(isHost && !verdict.done);
           const iAmBoar = (verdict.boar.id === myId);
           const answered = checks.some((c) => c.kind === "boar" && c.voter_id === myId);
           if (verdict.done) {
-            $("checkText").textContent =
-              `${verdict.boar.pseudo} ${verdict.success ? "a" : "n'a pas"} rempli sa condition ` +
-              `(${verdict.yes} oui, ${verdict.no} non)` +
-              (verdict.success ? ` : +${POINTS.boarWin} points.` : ".");
+            $("checkText").textContent = verdict.answered === 0
+              ? `Aucune réponse : pas de bonus pour ${verdict.boar.pseudo}.`
+              : `${verdict.boar.pseudo} ${verdict.success ? "a" : "n'a pas"} rempli sa condition ` +
+                `(${verdict.yes} oui, ${verdict.no} non)` +
+                (verdict.success ? ` : +${POINTS.boarWin} points.` : ".") +
+                (verdict.answered < verdict.voters ? " Vérification clôturée par l'hôte : les absents sont ignorés." : "");
           } else if (iAmBoar || answered) {
             $("checkText").textContent =
               `Vérification en cours : ${verdict.answered} / ${verdict.voters} réponses.`;
@@ -736,6 +740,10 @@
         });
 
         $("again").hidden = !isHost;
+        // Pas de nouvelle partie tant que la vérification n'est pas terminée et le bonus accordé
+        const pending = !!verdict && room.result === "win" && !(verdict.done && room.bonus_scored);
+        $("again").disabled = pending;
+        $("again").textContent = pending ? "Nouvelle partie (vérification en cours…)" : "Nouvelle partie";
         show("finished");
       }
     }
@@ -804,12 +812,19 @@
 
     // Nouvelle partie : on efface votes, rôles et résultat, et on revient au salon
     $("again").addEventListener("click", async () => {
+      // Garde-fou : on ne repart pas tant que des réponses de vérification manquent
+      const { data: ps } = await db.from("players").select("id, role").eq("room_code", roomCode);
+      const { data: cs } = await db.from("checks").select("voter_id, kind, answer").eq("room_code", roomCode);
+      const { data: rm } = await db.from("rooms").select("result, bonus_scored, checks_closed").eq("code", roomCode).single();
+      const v = (ps && cs && rm) ? boarVerdict(ps, cs, rm.checks_closed) : null;
+      if (v && rm && rm.result === "win" && !(v.done && rm.bonus_scored)) return;
+
       await db.from("votes").delete().eq("room_code", roomCode);
       await db.from("checks").delete().eq("room_code", roomCode);
       await db.from("players").update({ role: "crew" }).eq("room_code", roomCode);
       await db
         .from("rooms")
-        .update({ status: "lobby", result: null, game_started_at: null, game_ended_at: null, vane_sides: [], bonus_scored: false })
+        .update({ status: "lobby", result: null, game_started_at: null, game_ended_at: null, vane_sides: [], bonus_scored: false, checks_closed: false })
         .eq("code", roomCode);
     });
 
@@ -941,7 +956,7 @@
     // ---------- Vérification par les joueurs (Sanglier) ----------
 
     // Résume les réponses « oui / non » des joueurs sur la condition du Sanglier
-    function boarVerdict(players, checks) {
+    function boarVerdict(players, checks, closed = false) {
       const boar = players.find((p) => p.role === "boar");
       if (!boar) return null;
       const voters = players.filter((p) => p.id !== boar.id);
@@ -955,18 +970,28 @@
         answered: answers.length,
         yes,
         no: answers.length - yes,
-        done: answers.length >= voters.length,
-        // Règle : en cas d'égalité, la condition compte comme remplie
-        success: yes * 2 >= voters.length
+        // Terminée quand tous ont répondu, ou quand l'hôte l'a clôturée (les absents sont ignorés)
+        done: closed || answers.length >= voters.length,
+        // Règle : en cas d'égalité, la condition compte comme remplie. Sans aucune réponse : pas de bonus
+        success: answers.length > 0 && yes * 2 >= answers.length
       };
     }
 
     async function answerCheck(value) {
+      // Une réponse arrivée après la clôture serait ignorée : on la refuse
+      const { data: rm } = await db.from("rooms").select("checks_closed").eq("code", roomCode).single();
+      if (rm && rm.checks_closed) return;
       const { error } = await db
         .from("checks")
         .insert({ room_code: roomCode, voter_id: myId, kind: "boar", answer: value });
       if (error) console.error(error);
     }
+
+    // L'hôte clôture la vérification : seules les réponses déjà reçues comptent
+    async function skipCheck() {
+      await db.from("rooms").update({ checks_closed: true }).eq("code", roomCode).eq("status", "finished");
+    }
+    $("skipCheck").addEventListener("click", skipCheck);
 
     // Ajoute des points à un joueur (utilisé pour les bonus décidés après la fin du vote)
     async function awardBonus(playerId, points) {
