@@ -121,12 +121,17 @@
     #count { margin: 0 0 16px; font-weight: 700; opacity: .7; }
 
     /* Catalogue des rôles */
-    #roleList { list-style: none; margin: 0 0 16px; padding: 0; }
+    #lobby { max-width: 760px; }
+    #roleList {
+      list-style: none; margin: 0 0 16px; padding: 0;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px;
+    }
     #roleList li {
-      display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding: 10px 14px;
+      display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 10px 12px;
       background: var(--paper); border: 3px solid var(--line); border-radius: 14px;
     }
-    #roleList li > div { flex: 1; }
+    #roleList details { font-size: .85rem; }
+    #roleList summary { cursor: pointer; font-weight: 700; opacity: .8; }
     .role-name { font-weight: 700; font-size: 1.05rem; }
     .role-desc { font-size: .9rem; opacity: .85; margin-top: 2px; }
     .role-tag { flex: none; font-size: .8rem; font-weight: 700; opacity: .7; }
@@ -155,7 +160,7 @@
     }
     .mission-list { margin: 0 0 12px; padding-left: 22px; font-weight: 400; }
 
-    .role-controls { display: flex; flex-direction: column; gap: 6px; }
+    .role-controls { display: flex; flex-wrap: wrap; gap: 6px 14px; }
     .role-controls label {
       display: flex; align-items: center; gap: 6px; font-size: .85rem; font-weight: 700; white-space: nowrap;
     }
@@ -561,30 +566,12 @@
         $("roleList").innerHTML = "";
         for (const [id, r] of Object.entries(ROLES)) {
           const li = document.createElement("li");
-          const box = document.createElement("div");
-          const name = document.createElement("div");
-          name.className = "role-name"; name.textContent = `${r.icon} ${r.name}`;
-          const desc = document.createElement("div");
-          desc.className = "role-desc"; desc.textContent = r.desc;
-          box.append(name, desc);
-          const intervalColumn = INTERVAL_COLUMNS[id];
-          if (intervalColumn && (room.roles || []).includes(id)) {
-            const opt = document.createElement("div");
-            opt.className = "role-desc";
-            opt.append(id === "monkey" ? "Une mission toutes les " : "Tirage toutes les ");
-            const sel = document.createElement("select");
-            for (const m of [3, 5, 8, 10]) {
-              const o = document.createElement("option");
-              o.value = m; o.textContent = m;
-              sel.appendChild(o);
-            }
-            sel.value = room[intervalColumn];
-            sel.disabled = !isHost;
-            sel.addEventListener("change", () => setRoleInterval(intervalColumn, Number(sel.value)));
-            opt.append(sel, " minutes");
-            box.append(opt);
-          }
-          li.append(box);
+
+          const title = document.createElement("div");
+          title.className = "role-name";
+          title.textContent = `${r.icon} ${r.name}`;
+          li.append(title);
+
           if (r.optional) {
             const enabled = (room.roles || []).includes(id);
             const lockedIds = room.locked_roles || [];
@@ -612,10 +599,45 @@
             controls.append(inclLabel, lockLabel);
             li.append(controls);
           } else {
-            const tag = document.createElement("span");
-            tag.className = "role-tag"; tag.textContent = "toujours en jeu";
+            const tag = document.createElement("div");
+            tag.className = "role-tag";
+            tag.textContent = "toujours en jeu";
             li.append(tag);
           }
+
+          // Fréquence réglable (Girouette, Singe)
+          const intervalColumn = INTERVAL_COLUMNS[id];
+          if (intervalColumn && (room.roles || []).includes(id)) {
+            const opt = document.createElement("div");
+            opt.className = "role-desc";
+            opt.append(id === "monkey" ? "Une mission toutes les " : "Tirage toutes les ");
+            const sel = document.createElement("select");
+            for (const m of [3, 5, 8, 10]) {
+              const o = document.createElement("option");
+              o.value = m; o.textContent = m;
+              sel.appendChild(o);
+            }
+            sel.value = room[intervalColumn];
+            sel.disabled = !isHost;
+            sel.addEventListener("change", () => setRoleInterval(intervalColumn, Number(sel.value)));
+            opt.append(sel, " minutes");
+            li.append(opt);
+          }
+
+          // Description repliable, pour garder la liste compacte
+          const details = document.createElement("details");
+          const summary = document.createElement("summary");
+          summary.textContent = "Description";
+          const desc = document.createElement("div");
+          desc.className = "role-desc";
+          desc.textContent = r.desc;
+          details.append(summary, desc);
+          details.open = openRoleDescs.has(id);
+          details.addEventListener("toggle", () => {
+            if (details.open) openRoleDescs.add(id); else openRoleDescs.delete(id);
+          });
+          li.append(details);
+
           $("roleList").appendChild(li);
         }
         $("start").hidden = !isHost;
@@ -1013,6 +1035,9 @@
 
     // Nombre maximum de rôles optionnels par partie (si l'hôte en coche plus, on en tire au sort)
     const MAX_EXTRA_ROLES = 4;
+
+    // Descriptions de rôles dépliées (la liste est redessinée à chaque changement)
+    const openRoleDescs = new Set();
 
     // Rôles qui ont une fréquence réglable par l'hôte (colonne de la table rooms)
     const INTERVAL_COLUMNS = { vane: "vane_interval", monkey: "monkey_interval" };
