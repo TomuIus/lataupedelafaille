@@ -605,7 +605,7 @@
             li.append(tag);
           }
 
-          // Fréquence réglable (Girouette, Singe)
+          // Fréquence réglable (Caméléon, Singe)
           const intervalColumn = INTERVAL_COLUMNS[id];
           if (intervalColumn && (room.roles || []).includes(id)) {
             const opt = document.createElement("div");
@@ -735,8 +735,8 @@
           }
         }
         if (vane) {
-          text += `\n${ROLES.vane.icon} ${vane.pseudo} était la Girouette, finie du côté de ${sideLabel(vaneSide)} : ` +
-                  (vaneWon ? "elle gagne !" : "elle perd.");
+          text += `\n${ROLES.vane.icon} ${vane.pseudo} était le Caméléon, fini du côté de ${sideLabel(vaneSide)} : ` +
+                  (vaneWon ? "il gagne !" : "il perd.");
         }
         for (const id of VERIFIED_ROLES) {
           const holder = players.find((p) => p.role === id);
@@ -983,7 +983,7 @@
     // Catalogue des rôles. Les identifiants (crew, mole, badger) sont ceux stockés en base.
     const ROLES = {
       crew: {
-        name: "Équipier", icon: "🛡️", optional: false,
+        name: "La Marmotte", icon: "🐿️", optional: false,
         desc: "Gagnez la partie et démasquez la Taupe."
       },
       mole: {
@@ -995,7 +995,7 @@
         desc: "Faites gagner l'équipe, mais faites-vous passer pour la Taupe : vous gagnez si l'équipe gagne et que vous recevez plus de voix qu'elle."
       },
       vane: {
-        name: "La Girouette", icon: "🔄", optional: true,
+        name: "Le Caméléon", icon: "🦎", optional: true,
         desc: "À chaque tirage, vous avez une chance sur deux de changer de camp (équipe ou Taupe). Seul compte votre camp à la fin de la partie : vous gagnez si vous finissez côté équipe et que la partie est gagnée, ou côté Taupe et que la partie est perdue. Une alerte vous indique votre camp à chaque tirage."
       },
       boar: {
@@ -1018,11 +1018,11 @@
 
     // Barème : à ajuster ici après les tests si le jeu paraît déséquilibré
     const POINTS = {
-      teamWin: 1,    // partie gagnée : chaque joueur sauf la Taupe (et la Girouette finie côté Taupe)
+      teamWin: 1,    // partie gagnée : chaque joueur sauf la Taupe (et le Caméléon fini côté Taupe)
       voteHit: 1,    // chaque joueur qui a voté pour la Taupe, dans tous les cas (démasquée ou non)
       moleWin: 2,    // partie perdue, Taupe non démasquée (égalité comprise)
       badgerWin: 2,  // bonus du Blaireau : partie gagnée et plus de voix que la Taupe
-      vaneWin: 2,    // bonus de la Girouette : son camp final correspond au résultat de la partie
+      vaneWin: 2,    // bonus du Caméléon : son camp final correspond au résultat de la partie
       boarWin: 2,    // bonus du Sanglier : partie gagnée et condition confirmée par les autres joueurs
       swanWin: 2,    // bonus du Cygne : partie gagnée et consigne confirmée par les autres joueurs
       monkeyWin: 2,  // bonus du Singe : partie gagnée et missions jugées plutôt réussies
@@ -1115,7 +1115,7 @@
       };
       let badgerWon = false;
 
-      // Une Girouette qui finit côté Taupe alors que l'équipe gagne a perdu : pas le point de victoire
+      // Un Caméléon qui finit côté Taupe alors que l'équipe gagne a perdu : pas le point de victoire
       // (elle garde en revanche le point d'avoir désigné la Taupe)
       const vaneLost = (id) => vane && id === vane.id && result === "win" && vaneSide === "mole";
 
@@ -1153,11 +1153,11 @@
         result === "win" ? "bonus Bouledogue" : "malus Bouledogue"
       );
 
-      // La Girouette gagne selon son camp final : équipe si la partie est gagnée, Taupe si elle est perdue
+      // Le Caméléon gagne selon son camp final : équipe si la partie est gagnée, Taupe si elle est perdue
       let vaneWon = false;
       if (vane) {
         vaneWon = (vaneSide === "team" && result === "win") || (vaneSide === "mole" && result === "loss");
-        if (vaneWon) add(vane.id, POINTS.vaneWin, "bonus Girouette");
+        if (vaneWon) add(vane.id, POINTS.vaneWin, "bonus Caméléon");
       }
       return { mole, badger, vane, counts, caught, badgerWon, vaneWon, vaneSide, gains, reasons };
     }
@@ -1424,12 +1424,12 @@
       }, 500);
     });
 
-    // ---------- La Girouette ----------
+    // ---------- Le Caméléon ----------
 
     const sideLabel = (side) => (side === "team" ? "l'équipe" : "la Taupe");
     const currentPermission = () => ("Notification" in window ? Notification.permission : "unsupported");
 
-    // L'hôte choisit la fréquence des tirages (Girouette) ou des missions (Singe)
+    // L'hôte choisit la fréquence des tirages (Caméléon) ou des missions (Singe)
     async function setRoleInterval(column, minutes) {
       await db.from("rooms").update({ [column]: minutes }).eq("code", roomCode);
     }
@@ -1438,7 +1438,7 @@
     function makeVaneSchedule(intervalMinutes) {
       const ticks = Math.ceil(90 / intervalMinutes); // de quoi couvrir 90 minutes de partie
       const sides = [];
-      let side = "team"; // la Girouette commence du côté de l'équipe
+      let side = "team"; // le Caméléon commence du côté de l'équipe
       for (let i = 0; i < ticks; i++) {
         if (Math.random() < 0.5) side = (side === "team") ? "mole" : "team";
         sides.push(side);
@@ -1458,7 +1458,7 @@
       return sides[Math.min(tick, sides.length) - 1];
     }
 
-    // Camp de la Girouette au moment où l'hôte a indiqué la fin de la partie
+    // Camp du Caméléon au moment où l'hôte a indiqué la fin de la partie
     function vaneFinalSide(room) {
       if (!room.game_started_at || !room.game_ended_at) return "team";
       return vaneSideAtTick(room, vaneTickAt(room, new Date(room.game_ended_at).getTime()));
@@ -1468,7 +1468,7 @@
     let vaneTimer = null;
     let vaneLastTick = 0;
 
-    // Affiche le camp actuel (visible seulement quand la Girouette a révélé son rôle)
+    // Affiche le camp actuel (visible seulement quand le Caméléon a révélé son rôle)
     function renderVane() {
       if (!vaneRoom) return;
       const el = $("vaneSide");
@@ -1487,7 +1487,7 @@
       vaneRoom = null;
     }
 
-    // Appelé à chaque rafraîchissement : lance la surveillance des tirages pour la Girouette
+    // Appelé à chaque rafraîchissement : lance la surveillance des tirages pour le Caméléon
     function updateVane(room) {
       if (myRole !== "vane" || !room.game_started_at) { stopVane(); return; }
       vaneRoom = room;
