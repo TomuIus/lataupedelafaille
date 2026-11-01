@@ -132,7 +132,12 @@
     }
     #roleList details { font-size: .85rem; }
     #roleList summary { cursor: pointer; font-weight: 700; opacity: .8; }
-    .role-name { font-weight: 700; font-size: 1.05rem; }
+    .role-name { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 1.05rem; }
+
+    /* Icônes des rôles (dessins SVG, voir ICONS dans le code) */
+    .role-icon { flex: none; vertical-align: middle; }
+    #role .role-icon { display: block; margin: 0 auto 10px; }
+    .check-text .role-icon { margin-right: 6px; }
     .role-desc { font-size: .9rem; opacity: .85; margin-top: 2px; }
     .role-tag { flex: none; font-size: .8rem; font-weight: 700; opacity: .7; }
     #roleList input[type="checkbox"] { width: 26px; height: 26px; flex: none; accent-color: #ff5d9e; }
@@ -205,7 +210,8 @@
     .res-detail { margin-top: 3px; font-size: .9rem; font-weight: 400; }
     .res-points { margin-top: 3px; font-size: .85rem; font-weight: 700; opacity: .85; }
     .badge {
-      font-size: .8rem; padding: 2px 10px; color: #2b2d42;
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: .8rem; padding: 2px 10px 2px 4px; color: #2b2d42;
       border: 2px solid var(--line); border-radius: 999px;
     }
     .badge.mole { background: #ff5d73; color: #fff; }
@@ -217,7 +223,9 @@
     .badge.monkey { background: #d9a066; }
     .badge.bulldog { background: #8d99ae; color: #fff; }
 
-    #resultText { font-size: 1.3rem; font-weight: 700; line-height: 1.5; white-space: pre-line; }
+    #resultText { margin: 0 0 16px; font-size: 1.1rem; font-weight: 700; line-height: 1.4; }
+    .res-line { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .res-line:first-child { font-size: 1.3rem; }
     #voteResult li, #ranking li {
       margin-bottom: 8px; padding: 8px 14px; font-weight: 700;
       background: var(--paper); border: 2px solid var(--line); border-radius: 12px;
@@ -351,7 +359,7 @@
   <!-- Écran 5 : résultat -->
   <div id="finished" hidden>
     <h2>Fin de partie</h2>
-    <p id="resultText"></p>
+    <div id="resultText"></div>
     <h3>Les rôles et les votes</h3>
     <p class="res-legend">✅ a désigné la Taupe · ❌ s'est trompé</p>
     <ul id="voteResult"></ul>
@@ -569,7 +577,7 @@
 
           const title = document.createElement("div");
           title.className = "role-name";
-          title.textContent = `${r.icon} ${r.name}`;
+          title.append(roleIcon(id, 40), r.name);
           li.append(title);
 
           if (r.optional) {
@@ -720,42 +728,60 @@
           computePoints(room.result, players, votes, vaneFinalSide(room), verified);
         const moleName = mole ? mole.pseudo : "?";
 
-        let text = room.result === "win"
-          ? `Victoire de l'équipe ! ${moleName} était la Taupe : elle perd.`
-          : caught
-            ? `Défaite, mais ${moleName} était la Taupe et elle a été démasquée : elle perd aussi !`
-            : `Défaite. ${moleName} était la Taupe et elle n'a pas été démasquée : la Taupe gagne.`;
+        // Une ligne par rôle, chacune précédée de l'icône du rôle
+        const lines = [{
+          role: "mole",
+          text: room.result === "win"
+            ? `Victoire de l'équipe ! ${moleName} était la Taupe : elle perd.`
+            : caught
+              ? `Défaite, mais ${moleName} était la Taupe et elle a été démasquée : elle perd aussi !`
+              : `Défaite. ${moleName} était la Taupe et elle n'a pas été démasquée : la Taupe gagne.`
+        }];
         if (badger) {
-          if (room.result !== "win") {
-            text += `\n${ROLES.badger.icon} ${badger.pseudo} était le Blaireau : l'équipe a perdu, il ne gagne pas.`;
-          } else if (badgerWon) {
-            text += `\n${ROLES.badger.icon} ${badger.pseudo} était le Blaireau et a réussi à passer pour la Taupe !`;
-          } else {
-            text += `\n${ROLES.badger.icon} ${badger.pseudo} était le Blaireau, mais il n'a pas assez trompé l'équipe.`;
-          }
+          lines.push({
+            role: "badger",
+            text: room.result !== "win"
+              ? `${badger.pseudo} était le Blaireau : l'équipe a perdu, il ne gagne pas.`
+              : badgerWon
+                ? `${badger.pseudo} était le Blaireau et a réussi à passer pour la Taupe !`
+                : `${badger.pseudo} était le Blaireau, mais il n'a pas assez trompé l'équipe.`
+          });
         }
         if (vane) {
-          text += `\n${ROLES.vane.icon} ${vane.pseudo} était le Caméléon, fini du côté de ${sideLabel(vaneSide)} : ` +
-                  (vaneWon ? "il gagne !" : "il perd.");
+          lines.push({
+            role: "vane",
+            text: `${vane.pseudo} était le Caméléon, fini du côté de ${sideLabel(vaneSide)} : ` +
+                  (vaneWon ? "il gagne !" : "il perd.")
+          });
         }
         for (const id of VERIFIED_ROLES) {
           const holder = players.find((p) => p.role === id);
           if (!holder) continue;
-          text += `\n${ROLES[id].icon} ${holder.pseudo} était ${ROLES[id].name.replace(/^L/, "l")}`;
+          let line = `${holder.pseudo} était ${ROLES[id].name.replace(/^L/, "l")}`;
           if (id === "swan") {
             const loved = players.find((p) => p.id === holder.loved_id);
-            if (loved) text += ` (aimé : ${loved.pseudo})`;
+            if (loved) line += ` (aimé : ${loved.pseudo})`;
           }
-          text += (room.result === "win") ? "." : " : l'équipe a perdu, il ne gagne pas.";
+          line += (room.result === "win") ? "." : " : l'équipe a perdu, il ne gagne pas.";
+          lines.push({ role: id, text: line });
         }
         const bulldogPlayer = players.find((p) => p.role === "bulldog");
         if (bulldogPlayer) {
-          text += `\n${ROLES.bulldog.icon} ${bulldogPlayer.pseudo} était le Bouledogue : ` +
+          lines.push({
+            role: "bulldog",
+            text: `${bulldogPlayer.pseudo} était le Bouledogue : ` +
                   (room.result === "win"
                     ? `l'équipe a gagné, +${POINTS.bulldogWin} points !`
-                    : `l'équipe a perdu, -${POINTS.bulldogLoss} point.`);
+                    : `l'équipe a perdu, -${POINTS.bulldogLoss} point.`)
+          });
         }
-        $("resultText").textContent = text;
+        $("resultText").innerHTML = "";
+        for (const l of lines) {
+          const div = document.createElement("div");
+          div.className = "res-line";
+          div.append(roleIcon(l.role, 40), l.text);
+          $("resultText").appendChild(div);
+        }
 
         $("voteResult").innerHTML = "";
         const byId = Object.fromEntries(players.map((p) => [p.id, p]));
@@ -769,7 +795,7 @@
           const badge = document.createElement("span");
           badge.className = "badge " + (ROLES[p.role] ? p.role : "crew");
           const shown = ROLES[p.role] || ROLES.crew;
-          badge.textContent = `${shown.icon} ${shown.name}`;
+          badge.append(roleIcon(ROLES[p.role] ? p.role : "crew", 22), shown.name);
           head.append(name, badge);
 
           // Pour qui a-t-il voté ? Et a-t-il vu juste ? (la Taupe ne peut pas se désigner : pas de verdict)
@@ -805,7 +831,7 @@
             const item = document.createElement("div");
             const line = document.createElement("p");
             line.className = "check-text";
-            const name = `${v.holder.pseudo} (${ROLES[v.roleId].icon} ${ROLES[v.roleId].name})`;
+            const name = `${v.holder.pseudo} (${ROLES[v.roleId].name})`;
             const answered = checks.some((c) => c.kind === v.roleId && c.voter_id === myId);
 
             if (v.done) {
@@ -843,6 +869,7 @@
               if (missionList) item.append(line, missionList, buttons);
               else item.append(line, buttons);
             }
+            line.prepend(roleIcon(v.roleId, 28));
             $("checkList").appendChild(item);
           }
         }
@@ -918,10 +945,12 @@
         $("toggleRole").textContent = "Voir mon rôle";
       } else {
         const r = ROLES[myRole] || ROLES.crew;
-        roleEl.textContent = `Vous êtes ${r.icon} ${r.name.toUpperCase()} : ${r.desc}`;
+        roleEl.textContent = "";
+        roleEl.append(roleIcon(ROLES[myRole] ? myRole : "crew", 88),
+                      `Vous êtes ${r.name.toUpperCase()} : ${r.desc}`);
         roleEl.className = ROLES[myRole] ? myRole : "crew";
         if (myRole === "swan" && myLovedName) {
-          roleEl.textContent += ` Votre aimé : ${myLovedName.toUpperCase()}.`;
+          roleEl.append(` Votre aimé : ${myLovedName.toUpperCase()}.`);
         }
         roleEl.hidden = false;
         $("toggleRole").textContent = "Cacher mon rôle";
@@ -980,41 +1009,191 @@
 
     // ---------- Points ----------
 
-    // Catalogue des rôles. Les identifiants (crew, mole, badger) sont ceux stockés en base.
+    // Catalogue des rôles. Les identifiants (crew, mole, badger…) sont ceux stockés en base.
+    // L'icône de chaque rôle est un dessin SVG, rangé sous le même identifiant dans ICONS.
     const ROLES = {
       crew: {
-        name: "La Marmotte", icon: "🐿️", optional: false,
+        name: "La Marmotte", optional: false,
         desc: "Gagnez la partie et démasquez la Taupe."
       },
       mole: {
-        name: "La Taupe", icon: "🕳️", optional: false,
+        name: "La Taupe", optional: false,
         desc: "Faites perdre l'équipe sans vous faire repérer. Il y en a toujours une seule."
       },
       badger: {
-        name: "Le Blaireau", icon: "🦡", optional: true,
+        name: "Le Blaireau", optional: true,
         desc: "Faites gagner l'équipe, mais faites-vous passer pour la Taupe : vous gagnez si l'équipe gagne et que vous recevez plus de voix qu'elle."
       },
       vane: {
-        name: "Le Caméléon", icon: "🦎", optional: true,
+        name: "Le Caméléon", optional: true,
         desc: "À chaque tirage, vous avez une chance sur deux de changer de camp (équipe ou Taupe). Seul compte votre camp à la fin de la partie : vous gagnez si vous finissez côté équipe et que la partie est gagnée, ou côté Taupe et que la partie est perdue. Une alerte vous indique votre camp à chaque tirage."
       },
       boar: {
-        name: "Le Sanglier", icon: "🐗", optional: true,
+        name: "Le Sanglier", optional: true,
         desc: "Faites gagner l'équipe en ayant à la fois le plus de morts et le plus de dégâts infligés parmi les 10 joueurs de la partie. À la fin, les autres joueurs confirment si vous avez rempli la condition."
       },
       swan: {
-        name: "Le Cygne", icon: "🦢", optional: true,
+        name: "Le Cygne", optional: true,
         desc: "Un joueur tiré au sort, que vous seul connaissez, est votre aimé. S'il meurt dans LoL, vous devez le suivre dans la mort assez rapidement, tout en faisant gagner l'équipe. À la fin, les autres joueurs confirment si vous avez respecté votre consigne."
       },
       monkey: {
-        name: "Le Singe", icon: "🐵", optional: true,
+        name: "Le Singe", optional: true,
         desc: "Pendant la partie, vous recevez régulièrement une mission à réaliser, dans le jeu ou à l'oral, annoncée par la voix. Faites gagner l'équipe tout en réussissant plutôt vos missions : à la fin, les autres joueurs confirment si vous y êtes parvenu."
       },
       bulldog: {
-        name: "Le Bouledogue", icon: "🐶", optional: true,
+        name: "Le Bouledogue", optional: true,
         desc: "Faites gagner l'équipe à tout prix : si elle gagne, vous marquez un gros bonus (+3 points), mais si elle perd, vous perdez 1 point."
       }
     };
+
+    // Icônes des rôles : têtes d'animaux en SVG, dans le style de la mascotte
+    // (contour sombre épais, couleurs franches). Cadre commun : 100 x 100.
+    const ICON_LINE = "#2b2d42";
+    const ICONS = {
+      // La Marmotte : tête ronde, petites oreilles, joues roses, deux grandes dents
+      crew: `
+        <circle cx="24" cy="30" r="10" fill="#c68a4e" stroke="${ICON_LINE}" stroke-width="4"/>
+        <circle cx="76" cy="30" r="10" fill="#c68a4e" stroke="${ICON_LINE}" stroke-width="4"/>
+        <circle cx="24" cy="30" r="4.5" fill="#8a5a35"/>
+        <circle cx="76" cy="30" r="4.5" fill="#8a5a35"/>
+        <ellipse cx="50" cy="56" rx="36" ry="34" fill="#c68a4e" stroke="${ICON_LINE}" stroke-width="4"/>
+        <ellipse cx="50" cy="68" rx="20" ry="15" fill="#f1d3ae"/>
+        <circle cx="28" cy="62" r="5.5" fill="#ff8fc7" opacity=".75"/>
+        <circle cx="72" cy="62" r="5.5" fill="#ff8fc7" opacity=".75"/>
+        <circle cx="37" cy="48" r="5" fill="${ICON_LINE}"/>
+        <circle cx="63" cy="48" r="5" fill="${ICON_LINE}"/>
+        <circle cx="38.5" cy="46.5" r="1.7" fill="#fff"/>
+        <circle cx="64.5" cy="46.5" r="1.7" fill="#fff"/>
+        <ellipse cx="50" cy="60" rx="6" ry="4" fill="#5a3a2a"/>
+        <path d="M50 64 V68 M42 68 Q50 74 58 68" fill="none" stroke="${ICON_LINE}" stroke-width="3" stroke-linecap="round"/>
+        <path d="M44 71 H56 V80 Q50 82 44 80 Z M50 71 V81" fill="#fff" stroke="${ICON_LINE}" stroke-width="2.5" stroke-linejoin="round"/>`,
+
+      // La Taupe : la mascotte du logo (lunettes, museau rose, moustaches)
+      mole: `
+        <g transform="translate(50 54) scale(0.9) translate(-75 -84)">
+          <circle cx="36" cy="54" r="10" fill="#9b7653" stroke="${ICON_LINE}" stroke-width="4"/>
+          <circle cx="114" cy="54" r="10" fill="#9b7653" stroke="${ICON_LINE}" stroke-width="4"/>
+          <ellipse cx="75" cy="84" rx="44" ry="48" fill="#9b7653" stroke="${ICON_LINE}" stroke-width="4"/>
+          <ellipse cx="75" cy="98" rx="27" ry="22" fill="#d9b99b"/>
+          <circle cx="55" cy="68" r="16" fill="#fff" stroke="${ICON_LINE}" stroke-width="4"/>
+          <circle cx="95" cy="68" r="16" fill="#fff" stroke="${ICON_LINE}" stroke-width="4"/>
+          <path d="M71 68 H79" stroke="${ICON_LINE}" stroke-width="4" stroke-linecap="round"/>
+          <circle cx="58" cy="70" r="5.5" fill="${ICON_LINE}"/>
+          <circle cx="92" cy="70" r="5.5" fill="${ICON_LINE}"/>
+          <circle cx="60" cy="68" r="1.8" fill="#fff"/>
+          <circle cx="94" cy="68" r="1.8" fill="#fff"/>
+          <ellipse cx="75" cy="90" rx="13" ry="9" fill="#ff8fc7" stroke="${ICON_LINE}" stroke-width="3.5"/>
+          <ellipse cx="75" cy="87" rx="6" ry="3.5" fill="#ff5d9e"/>
+          <path d="M75 99 V102 M66 103 Q75 112 84 103" fill="none" stroke="${ICON_LINE}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M62 91 Q42 79 22 80 M62 96 Q41 92 20 95 M88 91 Q108 79 128 80 M88 96 Q109 92 130 95"
+                fill="none" stroke="${ICON_LINE}" stroke-width="1.8" stroke-linecap="round"/>
+        </g>`,
+
+      // Le Blaireau : museau pointu, deux bandes noires du front au museau, raie blanche au milieu
+      badger: `
+        <circle cx="20" cy="40" r="9" fill="#8d8f9c" stroke="${ICON_LINE}" stroke-width="4"/>
+        <circle cx="80" cy="40" r="9" fill="#8d8f9c" stroke="${ICON_LINE}" stroke-width="4"/>
+        <path d="M50 92 C34 92 14 70 15 50 C16 30 32 21 50 21 C68 21 84 30 85 50 C86 70 66 92 50 92 Z" fill="#f4f1ea"/>
+        <path d="M33 25 C27 42 31 62 43 82 L47 80 C44 62 43 40 43 22 Z" fill="#3d3d4c"/>
+        <path d="M67 25 C73 42 69 62 57 82 L53 80 C56 62 57 40 57 22 Z" fill="#3d3d4c"/>
+        <path d="M50 92 C34 92 14 70 15 50 C16 30 32 21 50 21 C68 21 84 30 85 50 C86 70 66 92 50 92 Z" fill="none" stroke="${ICON_LINE}" stroke-width="4"/>
+        <circle cx="37" cy="52" r="5.5" fill="#fff"/>
+        <circle cx="63" cy="52" r="5.5" fill="#fff"/>
+        <circle cx="37.5" cy="52.5" r="3.2" fill="${ICON_LINE}"/>
+        <circle cx="62.5" cy="52.5" r="3.2" fill="${ICON_LINE}"/>
+        <circle cx="27" cy="64" r="5" fill="#ff8fc7" opacity=".75"/>
+        <circle cx="73" cy="64" r="5" fill="#ff8fc7" opacity=".75"/>
+        <ellipse cx="50" cy="82" rx="7.5" ry="5.5" fill="${ICON_LINE}"/>
+        <circle cx="48" cy="80.5" r="1.6" fill="#fff"/>`,
+
+      // Le Caméléon : crête, gros yeux en tourelle qui regardent chacun ailleurs
+      vane: `
+        <path d="M28 44 Q50 4 72 44 Z" fill="#4fa35a" stroke="${ICON_LINE}" stroke-width="4" stroke-linejoin="round"/>
+        <ellipse cx="50" cy="60" rx="34" ry="28" fill="#7bc96f" stroke="${ICON_LINE}" stroke-width="4"/>
+        <circle cx="20" cy="54" r="14" fill="#7bc96f" stroke="${ICON_LINE}" stroke-width="4"/>
+        <circle cx="80" cy="54" r="14" fill="#7bc96f" stroke="${ICON_LINE}" stroke-width="4"/>
+        <circle cx="20" cy="54" r="7.5" fill="#fff"/>
+        <circle cx="80" cy="54" r="7.5" fill="#fff"/>
+        <circle cx="16" cy="52" r="4" fill="${ICON_LINE}"/>
+        <circle cx="82" cy="49" r="4" fill="${ICON_LINE}"/>
+        <circle cx="44" cy="44" r="3" fill="#b8e6a8"/>
+        <circle cx="57" cy="40" r="2.5" fill="#b8e6a8"/>
+        <circle cx="40" cy="80" r="3" fill="#4fa35a"/>
+        <circle cx="62" cy="81" r="2.5" fill="#4fa35a"/>
+        <circle cx="36" cy="68" r="5" fill="#ff8fc7" opacity=".75"/>
+        <circle cx="64" cy="68" r="5" fill="#ff8fc7" opacity=".75"/>
+        <path d="M38 70 Q50 80 62 70" fill="none" stroke="${ICON_LINE}" stroke-width="3" stroke-linecap="round"/>`,
+
+      // Le Sanglier : oreilles pointues, touffe de poils, groin, défenses, sourcils froncés
+      boar: `
+        <path d="M24 38 L16 12 L40 28 Z" fill="#7a5a44" stroke="${ICON_LINE}" stroke-width="4" stroke-linejoin="round"/>
+        <path d="M76 38 L84 12 L60 28 Z" fill="#7a5a44" stroke="${ICON_LINE}" stroke-width="4" stroke-linejoin="round"/>
+        <ellipse cx="50" cy="54" rx="34" ry="31" fill="#7a5a44" stroke="${ICON_LINE}" stroke-width="4"/>
+        <path d="M38 28 L42 14 L47 25 L51 11 L55 25 L60 15 L62 29" fill="#4a3426" stroke="${ICON_LINE}" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M30 41 L44 45 M70 41 L56 45" stroke="${ICON_LINE}" stroke-width="4" stroke-linecap="round"/>
+        <circle cx="38" cy="50" r="4.5" fill="${ICON_LINE}"/>
+        <circle cx="62" cy="50" r="4.5" fill="${ICON_LINE}"/>
+        <circle cx="39.3" cy="48.7" r="1.5" fill="#fff"/>
+        <circle cx="63.3" cy="48.7" r="1.5" fill="#fff"/>
+        <path d="M36 74 Q24 72 27 58 Q32 68 40 68 Z" fill="#fff" stroke="${ICON_LINE}" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M64 74 Q76 72 73 58 Q68 68 60 68 Z" fill="#fff" stroke="${ICON_LINE}" stroke-width="3" stroke-linejoin="round"/>
+        <ellipse cx="50" cy="69" rx="16" ry="11" fill="#e0a487" stroke="${ICON_LINE}" stroke-width="3.5"/>
+        <ellipse cx="44.5" cy="69" rx="3" ry="4.5" fill="${ICON_LINE}"/>
+        <ellipse cx="55.5" cy="69" rx="3" ry="4.5" fill="${ICON_LINE}"/>`,
+
+      // Le Cygne : bec orange court avec sa bosse noire, petit cœur pour son aimé
+      swan: `
+        <path d="M32 96 Q20 72 37 56 L60 58 Q45 74 62 96 Z" fill="#fff" stroke="${ICON_LINE}" stroke-width="4" stroke-linejoin="round"/>
+        <circle cx="48" cy="42" r="21" fill="#fff" stroke="${ICON_LINE}" stroke-width="4"/>
+        <path d="M62 37 Q74 39 84 49 Q73 51 62 49 Z" fill="#ff9f1c" stroke="${ICON_LINE}" stroke-width="3.5" stroke-linejoin="round"/>
+        <path d="M58 34 Q66 28 69 38 Q66 44 61 49 Q56 44 58 34 Z" fill="${ICON_LINE}"/>
+        <circle cx="50" cy="38" r="4.5" fill="${ICON_LINE}"/>
+        <circle cx="51.3" cy="36.7" r="1.5" fill="#fff"/>
+        <circle cx="40" cy="50" r="5" fill="#ff8fc7" opacity=".75"/>
+        <path d="M20 30 C6 20 11 6 20 14 C29 6 34 20 20 30 Z" fill="#ff5d9e" stroke="${ICON_LINE}" stroke-width="3" stroke-linejoin="round"/>`,
+
+      // Le Singe : grandes oreilles, visage clair en cœur, mèche sur le dessus
+      monkey: `
+        <circle cx="17" cy="54" r="12" fill="#9b6b43" stroke="${ICON_LINE}" stroke-width="4"/>
+        <circle cx="83" cy="54" r="12" fill="#9b6b43" stroke="${ICON_LINE}" stroke-width="4"/>
+        <circle cx="17" cy="54" r="6" fill="#e8c39e"/>
+        <circle cx="83" cy="54" r="6" fill="#e8c39e"/>
+        <path d="M42 24 Q50 4 58 24 Z" fill="#9b6b43" stroke="${ICON_LINE}" stroke-width="4" stroke-linejoin="round"/>
+        <circle cx="50" cy="54" r="33" fill="#9b6b43" stroke="${ICON_LINE}" stroke-width="4"/>
+        <path d="M50 44 C42 30 22 34 25 54 C27 72 38 83 50 83 C62 83 73 72 75 54 C78 34 58 30 50 44 Z" fill="#e8c39e"/>
+        <circle cx="40" cy="52" r="4.5" fill="${ICON_LINE}"/>
+        <circle cx="60" cy="52" r="4.5" fill="${ICON_LINE}"/>
+        <circle cx="41.3" cy="50.7" r="1.5" fill="#fff"/>
+        <circle cx="61.3" cy="50.7" r="1.5" fill="#fff"/>
+        <circle cx="46.5" cy="63" r="1.8" fill="${ICON_LINE}"/>
+        <circle cx="53.5" cy="63" r="1.8" fill="${ICON_LINE}"/>
+        <path d="M37 69 Q50 80 63 69" fill="none" stroke="${ICON_LINE}" stroke-width="3" stroke-linecap="round"/>`,
+
+      // Le Bouledogue : tête large, oreilles repliées, bajoues, crocs du bas, air bougon
+      bulldog: `
+        <path d="M18 42 Q8 22 34 26 Q30 36 18 42 Z" fill="#a07c5a" stroke="${ICON_LINE}" stroke-width="4" stroke-linejoin="round"/>
+        <path d="M82 42 Q92 22 66 26 Q70 36 82 42 Z" fill="#a07c5a" stroke="${ICON_LINE}" stroke-width="4" stroke-linejoin="round"/>
+        <ellipse cx="50" cy="56" rx="37" ry="32" fill="#d9c3a5" stroke="${ICON_LINE}" stroke-width="4"/>
+        <path d="M41 33 Q50 29 59 33 M44 38 Q50 35.5 56 38" fill="none" stroke="${ICON_LINE}" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M27 44 L42 48 M73 44 L58 48" stroke="${ICON_LINE}" stroke-width="4" stroke-linecap="round"/>
+        <circle cx="36" cy="53" r="4.5" fill="${ICON_LINE}"/>
+        <circle cx="64" cy="53" r="4.5" fill="${ICON_LINE}"/>
+        <circle cx="37.3" cy="51.7" r="1.5" fill="#fff"/>
+        <circle cx="65.3" cy="51.7" r="1.5" fill="#fff"/>
+        <path d="M38 80 Q50 88 62 80 L62 76 L38 76 Z" fill="#c96a6a" stroke="${ICON_LINE}" stroke-width="3" stroke-linejoin="round"/>
+        <path d="M41 78 L43 69 L46 78 Z M54 78 L57 69 L59 78 Z" fill="#fff" stroke="${ICON_LINE}" stroke-width="2" stroke-linejoin="round"/>
+        <ellipse cx="38" cy="70" rx="13" ry="9" fill="#f1e3cf" stroke="${ICON_LINE}" stroke-width="3"/>
+        <ellipse cx="62" cy="70" rx="13" ry="9" fill="#f1e3cf" stroke="${ICON_LINE}" stroke-width="3"/>
+        <ellipse cx="50" cy="63" rx="9" ry="6" fill="${ICON_LINE}"/>
+        <circle cx="47.5" cy="61.5" r="1.8" fill="#fff"/>`
+    };
+
+    // Crée l'élément SVG de l'icône d'un rôle, à la taille demandée (en pixels)
+    function roleIcon(id, size) {
+      const t = document.createElement("template");
+      t.innerHTML = `<svg class="role-icon" viewBox="0 0 100 100" width="${size}" height="${size}" aria-hidden="true">${ICONS[id] || ICONS.crew}</svg>`;
+      return t.content.firstChild;
+    }
 
     // Barème : à ajuster ici après les tests si le jeu paraît déséquilibré
     const POINTS = {
